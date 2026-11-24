@@ -102,3 +102,40 @@ allianceId/allianceName/nickName + 背包/装备/邮件 + reconnectSign + server
 - [ ] 进主城消息流最小集
 - [ ] hook JS + 虚拟服务器实现
 - [ ] 重编译签名
+
+## 8. DCC 缓存机制破解(阶段2.5 决定性发现)
+- **hashstr(path) = crc32('/'+相对路径) 的8位小写hex** — 已用4组样本100%验证
+- DCC 缓存目录: assets/cache/https.__res.xxh5.z7xz.com_xxh5dev/
+- 文件映射表(位置对应,559条):
+  - allfiles.txt 第N行 = 路径
+  - filetable.txt = "ffeeffee 1" + assetsid(4×u32) + N×[urlhash 版本hash]
+  - filetable1.txt = N×[urlhash 版本hash]
+  - filetable.bin = 二进制版(16B assetsid + N×8B)
+- 版本hash为构建系统元数据(非内容哈希,不可推导;但自建filetable可任意赋值)
+- **JS 引导链均在DCC管理**: appindex.html/ver.js/skin/GameMain.max/login/entertest/cc/server/enter/md5
+- main/module 用版本后缀名(main_004827.js)绕过DCC → 改ver.js引用无后缀名(js/main.js)即可纳入缓存
+- CDN 当前 filetable 27.6万条(全量资源数GB,不可全量镜像 → 用APK自带559文件缓存)
+- updateDcc 流程: 下载update/assetsid.txt → 与netassetsid比较 → 不同则更新
+  - **离线关键钩子: window["downloadBySourceIp"]** — index.js 优先调用它
+  - 返回''且curassets为空 → 跳过更新继续用缓存(完美离线)
+  - patch APK assets/scripts/index.js 注入该钩子即实现永久离线
+
+## 9. APK 注入点(阶段2.5)
+- URL 硬编码于 classes.dex: com.jiguang.h5.SdkConst.Url (smali 单行可改,但DCC方案无需改)
+- MainActivity → game_plugin_set_option("gameUrl", SdkConst.Url) → laya引擎
+- conch presetUrl 由 native getPresetUrl 提供
+- 37wan_config.xml: gameid=1004816 partner=1 referer=1_1004816_12530_1001
+- 进主城: CityProtocol.cm_enterMainCity → CM_EnterMainCity(-3601, x,y)
+  响应段: -3604 SM_PlayerUpdate / -3605 SM_PlayerCanSee(视野玩家!) / -3606 SM_PlayerMove
+- 心跳: SM_HeartBeat(-1113) ← ResHeartBeatHandler
+
+## 10. 实施架构(定稿)
+1. patch assets/scripts/index.js: 注入 downloadBySourceIp → 离线跳过DCC更新
+2. DCC 注入修改后的游戏文件(crc32命名+filetable追加): appindex.html(改版boot) + ver.js(改引用) + js/main.js + js/module.js + vserver.js(虚拟服务器)
+3. vserver.js hooks:
+   - SocketHandler.prototype.connect → 假装连接成功(不建真socket)
+   - SocketHandler.prototype.sendPackage → 拦截出站帧 → 虚拟服务器处理
+   - 虚拟服务器: 复用游戏自己的 Message 类序列化 → _receiveFun.runWith([id, ByteArray]) 注入响应
+4. 登录链: -1122→-1102(带角色)→-1103→-1105+-1107→进图
+5. 假人: SM_PlayerCanSee/SM_PlayerMove 注入伪造玩家
+6. GM: ResLoginPlayerDetailInfo.isOpenGM=true
