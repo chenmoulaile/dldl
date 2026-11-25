@@ -1,14 +1,14 @@
-name: 构建离线APK
+name: 构建离线APK v2.2
 on:
   workflow_dispatch: {}
   push:
     branches: [main]
-    paths: ['game/**', 'scripts/patch_dcc.py', 'keystore/**']
+    paths: ['game/**', 'scripts/patch_offline.py', 'keystore/**', '.github/workflows/build-apk.yml']
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     permissions:
       contents: write
     steps:
@@ -34,34 +34,60 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;34.0.0" > /dev/null
           echo "$ANDROID_HOME/build-tools/34.0.0" >> $GITHUB_PATH
 
-      - name: 注入更新文件到 DCC 缓存
+      - name: 下载版本链文件 (CDN, scrc32字节校验)
         run: |
-          python3 scripts/patch_dcc.py base.apk game/
+          mkdir -p vendor
+          python3 - << 'EOF'
+          import json, os, urllib.request, sys
+          sys.path.insert(0, 'scripts')
+          from patch_offline import scrc32
+          spec = json.load(open('game/vendor.json'))
+          base = spec['base']
+          ok = True
+          for f in spec['files']:
+              path, size, want = f['path'], f['size'], f['scrc32']
+              dest = os.path.join('vendor', path)
+              os.makedirs(os.path.dirname(dest), exist_ok=True)
+              urllib.request.urlretrieve(base + path, dest)
+              data = open(dest, 'rb').read()
+              got = format(scrc32(data), '08x')
+              status = 'OK' if (got == want and len(data) == size) else 'FAIL'
+              if status == 'FAIL': ok = False
+              print('%s %-42s %d/%dB %s' % (status, path, len(data), size, got))
+          if not ok:
+              print('!! 版本链字节校验失败'); sys.exit(1)
+          print('版本链校验全部通过')
+          EOF
+
+      - name: 应用离线补丁 (DCC重打+filetable+入口替换+禁用CDN更新)
+        run: |
+          python3 scripts/patch_offline.py base.apk game/ vendor/ patched.apk
 
       - name: 对齐并签名
         run: |
-          zipalign -f -p 4 base.apk aligned.apk
+          zipalign -f -p 4 patched.apk aligned.apk
           apksigner sign --ks keystore/dldl.jks --ks-pass pass:dldl123456 \
-            --key-pass pass:dldl123456 --out dldlh5_offline_v2.1.apk aligned.apk
-          apksigner verify --print-certs dldlh5_offline_v2.1.apk | head -5
-          ls -la dldlh5_offline_v2.1.apk
+            --key-pass pass:dldl123456 --out dldlh5_offline_v2.2.apk aligned.apk
+          apksigner verify --print-certs dldlh5_offline_v2.2.apk | head -5
+          ls -la dldlh5_offline_v2.2.apk
 
-      - name: 上传为 v2.1 Release (幂等)
+      - name: 上传为 v2.2 Release (幂等)
         run: |
-          if gh release view v2.1-offline -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+          if gh release view v2.2-offline -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             echo "release 已存在, 上传新资产"
-            gh release upload v2.1-offline dldlh5_offline_v2.1.apk --clobber -R "$GITHUB_REPOSITORY"
+            gh release upload v2.2-offline dldlh5_offline_v2.2.apk --clobber -R "$GITHUB_REPOSITORY"
           else
-            gh release create v2.1-offline dldlh5_offline_v2.1.apk \
-              --title "单机离线版 v2.1" \
-              --notes "自动构建: 剧情链/武魂觉醒/商店购买/假人聊天/货币系统 全部修复
+            gh release create v2.2-offline dldlh5_offline_v2.2.apk \
+              --title "单机离线版 v2.2 (免登录直进)" \
+              --notes "启动修复: 替换CDN开发登录页为离线启动页, 打开即进游戏
 
-          - 剧情: 200001-200010 全通 (客户端配置驱动), 武魂觉醒五选一
-          - 商店: 购买扣费+物品入包闭环, 余额不足拦截
-          - 货币: 三货币正常显示(修复负数bug), 任务奖励发放
-          - 假人: 主城22个假人游走 + 世界聊天每9秒
-          - GM菜单: 金币/钻石/等级/猎场令牌/聊天开关/删档
-          - 猎场: 皇家猎场面板+引导, 令牌消耗进入" \
+          - 免登录: index.html 直启游戏 (跳过37wan/开发服务器列表)
+          - 永离线: 禁用 DCC 网络更新, filetable 重打 (scrc32 校验全对齐)
+          - VIP: 默认3级 + 双倍特权
+          - GM菜单: 画布版(真机可见) 金币/钻石/等级/令牌/聊天开关/删档
+          - 猎场: 皇家猎场协议 (挑战/结算/奖励/排行)
+          - 出生点: 主城30001 (正确剧情流程)
+          - 剧情/商店/假人/货币: 沿用 v2.1 已验证实现" \
               -R "$GITHUB_REPOSITORY"
           fi
         env:
@@ -70,5 +96,5 @@ jobs:
       - name: 上传构建产物 (备用)
         uses: actions/upload-artifact@v4
         with:
-          name: dldlh5-offline-apk
-          path: dldlh5_offline_v2.1.apk
+          name: dldlh5-offline-v22-apk
+          path: dldlh5_offline_v2.2.apk
