@@ -54,7 +54,20 @@
     function loadSave() {
         try {
             var s = window.localStorage.getItem(SAVE_KEY);
-            if (s) { var o = JSON.parse(s); var d = defaultSave(); for (var k in d) if (!(k in o)) o[k] = d[k]; return o; }
+            if (s) {
+                var o = JSON.parse(s); var d = defaultSave(); for (var k in d) if (!(k in o)) o[k] = d[k];
+                // 迁移: 老存档无 doneIds 时按主线链回填
+                if (o.story && o.story.curTaskId && (!o.story.doneIds || !o.story.doneIds.length)) {
+                    o.story.doneIds = [];
+                    var CHAIN = [200001, 200002, 200003, 200004, 200005, 200006, 200007, 200008, 200009, 200010,
+                        200011, 200012, 200013, 200014, 200015, 200016, 200017, 200018, 200019, 200020];
+                    for (var i = 0; i < CHAIN.length; i++) {
+                        if (CHAIN[i] == o.story.curTaskId) break;
+                        o.story.doneIds.push(CHAIN[i]);
+                    }
+                }
+                return o;
+            }
         } catch (e) { }
         return defaultSave();
     }
@@ -556,59 +569,369 @@
         log('地图加载完成 → 推送详情');
         setTimeout(sendLoginDetail, 120);
         setTimeout(pushExploreTasks, 800);
+        setTimeout(pushFunctionButtons, 1000);
+        // 等级追赶: 按完成任务数补等级 (老存档兼容)
+        (function () {
+            var p = V.save.player;
+            var dn = (V.save.story && V.save.story.doneIds) ? V.save.story.doneIds.length : 0;
+            var should = Math.max(1, Math.min(dn, 15));
+            if (p && p.level < should) {
+                p.level = should; p.exp = 0; persist();
+                var s = writeAuto('com.protocol.player.msg.ResLevelUpdateMessage',
+                    { level: p.level, addexp: 0, exp: 0, personID: p.personId });
+                if (s) setTimeout(function () { inject(V.handler, -1401, s); }, 1500);
+                log('等级追赶 → Lv', p.level);
+            }
+        })();
     };
 
     // ══ 探索任务(剧情主线)系统 ══
-    // 主线链: 200001斗罗大陆 → 200002觉醒仪式 → 200003觉醒大殿 → 200004武魂觉醒 → 200005武魂附体 → 200006魂力测试...
+    // 任务链由客户端配置表驱动(taskNextCondDef), 硬编码表仅作兜底
     var MAIN_CHAIN = [200001, 200002, 200003, 200004, 200005, 200006, 200007, 200008, 200009, 200010,
                       200011, 200012, 200013, 200014, 200015, 200016, 200017, 200018, 200019, 200020];
+    // 从客户端配置读下一个任务ID (更准确, 覆盖全部75个任务)
+    function getNextTaskId(taskId) {
+        try {
+            var MCls = window.Laya && Laya.__classmap && Laya.__classmap['com.game.exploreMission.model.ExploreMissModel'];
+            if (MCls && MCls.ins) {
+                var cfg = MCls.ins.getExploMissCfgById(taskId);
+                if (cfg && cfg.taskNextCondDef && cfg.taskNextCondDef[0] && cfg.taskNextCondDef[0].nextIds && cfg.taskNextCondDef[0].nextIds.length) {
+                    return cfg.taskNextCondDef[0].nextIds[0];
+                }
+            }
+        } catch (e) { }
+        var idx = MAIN_CHAIN.indexOf(taskId);
+        return (idx >= 0 && idx < MAIN_CHAIN.length - 1) ? MAIN_CHAIN[idx + 1] : 0;
+    }
+    // 任务奖励: 读配置 firstTime (首通魂币), 无配置默认500
+    function getTaskReward(taskId) {
+        var gold = 500;
+        try {
+            var MCls = window.Laya && Laya.__classmap && Laya.__classmap['com.game.exploreMission.model.ExploreMissModel'];
+            if (MCls && MCls.ins) {
+                var cfg = MCls.ins.getExploMissCfgById(taskId);
+                if (cfg && cfg.firstTime && cfg.firstTime > 0) gold = cfg.firstTime;
+            }
+        } catch (e) { }
+        return gold;
+    }
     function pushExploreTasks() {
         var st = V.save.story;
         // 当前任务: 已完成的下一个
-        var curId = MAIN_CHAIN.indexOf(st.curTaskId) >= 0 ? st.curTaskId : MAIN_CHAIN[0];
+        var curId = MAIN_CHAIN.indexOf(st.curTaskId) >= 0 ? st.curTaskId : st.curTaskId || MAIN_CHAIN[0];
+        var done = (st.doneIds || []).slice(0, 200);
+        if (done.indexOf(curId) >= 0) done.splice(done.indexOf(curId), 1);
         var ser = new Ser();
         ser.str('');                       // points
         ser.arrHead(1);                    // exploreTasks 数组1条
         ser.beanHead();
         ser.i32(curId).i32(st.progress || 0).i32(0).i32(0).i32(0).i32(0);  // TaskEntryVO
         ser.arrHead(0);                    // wasRewardIds 空
-        ser.arrHead(0);                    // completes: 已完成列表
-        for (var i = 0; i < MAIN_CHAIN.length; i++) {
-            if (MAIN_CHAIN[i] == curId) break;
-            // 只报已完成
-        }
+        ser.arrHead(done.length);          // completes: 已完成任务 → 客户端标记 taskStatu=1
+        for (var i = 0; i < done.length; i++) ser.i32(done[i]);
         inject(V.handler, -1626, ser);
-        log('推送探索任务 id=', curId);
+        log('推送探索任务 id=', curId, '已完成', done.length, '个');
     }
-    // 完成探索任务 → 下一条
-    HANDLERS[-1630] = function (h, body) {   // CM_Reward_Explor {taskId int}
-        var par = new Par(body);
-        var taskId = par.i32();
+    // 任务完成 → 发奖励 + 下一任务
+    function completeStoryTask(taskId) {
         var st = V.save.story;
-        log('完成探索任务', taskId);
-        var idx = MAIN_CHAIN.indexOf(taskId);
-        if (idx >= 0 && idx < MAIN_CHAIN.length - 1) {
-            st.curTaskId = MAIN_CHAIN[idx + 1];
+        var gold = getTaskReward(taskId);
+        var nextId = getNextTaskId(taskId);
+        log('任务完成', taskId, '奖励魂币', gold, '下一任务', nextId);
+        if (!st.doneIds) st.doneIds = [];
+        if (st.doneIds.indexOf(taskId) < 0) st.doneIds.push(taskId);
+        if (gold > 0) {
+            V.save.gold = V.save.gold + gold;
+            persist();
+            // 推货币变化 (type 1 = gold/魂币)
+            var s = new Ser();
+            s.i32(1).l64(V.save.gold).boolean(true).l64(gold).boolean(true).boolean(true).i32(0);
+            inject(V.handler, ID.RES_COIN_GOLD_UPDATE, s);
+        }
+        addExp(gold * 10);  // 任务经验 = 奖励的10倍 (快速成长)
+        if (nextId && nextId > 0) {
+            st.curTaskId = nextId;
             st.progress = 0;
         } else {
             st.progress = (st.progress || 0) + 1;
         }
         persist();
-        setTimeout(pushExploreTasks, 200);
+        setTimeout(pushExploreTasks, 250);
+        setTimeout(pushFunctionButtons, 600);
+    }
+    // 完成探索任务 → 下一条
+    HANDLERS[-1630] = function (h, body) {   // CM_Reward_Explor {taskId int}
+        var par = new Par(body);
+        var taskId = par.i32();
+        log('完成探索任务(奖励线)', taskId);
+        completeStoryTask(taskId);
     };
     HANDLERS[-1627] = function (h, body) {   // CM_Choose_Explor_Task {taskId, chooseId}
         var par = new Par(body);
         var taskId = par.i32(), chooseId = par.i32();
-        log('任务选择', taskId, '→', chooseId);
+        log('任务选择/主线推进', taskId, '→', chooseId);
         V.save.story.chooseId = chooseId;
-        // 选择即推进到下一任务
-        var idx = MAIN_CHAIN.indexOf(taskId);
-        if (idx >= 0 && idx < MAIN_CHAIN.length - 1) {
-            V.save.story.curTaskId = MAIN_CHAIN[idx + 1];
-            V.save.story.progress = 0;
+        persist();
+        completeStoryTask(taskId);
+    };
+
+    // 切换地图: ReqSwitchMap {mapId} → ResSwitchMap {mapId}
+    HANDLERS[-1201] = function (h, body) {
+        var par = new Par(body);
+        var mapId = par.i32();
+        log('切图请求 mapId=', mapId);
+        if (V.save.player) { V.save.player.mapId = mapId; persist(); }
+        var s = new Ser();
+        s.i32(mapId);
+        inject(h, -1209, s);   // ResSwitchMap → SwitchMapControl.switchMapId(mapId)
+        // 离开主城状态
+        V.state = 'ingame';
+    };
+
+    // 地图加载完成 (ReqFinishMapLoad): 推送地图怪物/宝箱等 (留空即可)
+    HANDLERS[-1210] = function (h) {
+        log('地图加载完成 mapId=', V.save.player ? V.save.player.mapId : '?');
+        // 重推当前任务 (切图后任务UI可能需要刷新)
+        setTimeout(pushExploreTasks, 300);
+        setTimeout(pushFunctionButtons, 500);
+    };
+
+    // ══ 顶栏功能按钮开放 (SM_FunctionButtonOpen) ══
+    function pushFunctionButtons() {
+        try {
+            var B = Laya.__classmap['com.Light37.ResourceSystem.data.ButtonSortCfgObj'];
+            if (!B || !B.ins) return;
+            var d = B.ins.map || B.ins._data;
+            if (!d) return;
+            var done = (V.save.story && V.save.story.doneIds) || [];
+            var ids = [];
+            for (var k in d) {
+                var b = d[k];
+                if (!b || b.posType != 2 || b.openType != 2) continue;
+                var key = parseInt(b.key);
+                if (key && done.indexOf(key) >= 0) {
+                    // 检查等级条件
+                    if (b.forceLimit && b.forceLimit <= 90 && V.save.player.level < b.forceLimit) continue;
+                    ids.push({ id: b.id, isNew: false, isClick: false });
+                }
+            }
+            if (!ids.length) return;
+            var s = writeAuto('com.protocol.mainButton.SM_FunctionButtonOpen', { ids: ids });
+            if (s) inject(V.handler, -2601, s);
+            log('开放顶栏功能按钮:', ids.map(function (x) { return x.id; }).join(','));
+        } catch (e) { log('功能按钮推送失败', e && e.message); }
+    }
+
+    // ══ 经验/等级系统 ══
+    function expNeed(lv) { return 60 * lv * (lv + 1); }
+    function addExp(n) {
+        var p = V.save.player; if (!p || n <= 0) return;
+        p.exp = (p.exp || 0) + n;
+        var leveled = 0;
+        while (p.level < 999 && p.exp >= expNeed(p.level)) { p.exp -= expNeed(p.level); p.level++; leveled++; }
+        persist();
+        if (leveled > 0) {
+            var s = writeAuto('com.protocol.player.msg.ResLevelUpdateMessage',
+                { level: p.level, addexp: n, exp: p.exp, personID: p.personId });
+            if (s) inject(V.handler, -1401, s);
+            log('升级 → Lv', p.level);
+        } else {
+            var s2 = writeAuto('com.protocol.player.msg.ResExpUpdateMessage',
+                { exp: p.exp, personID: p.personId, reasonId: 0, expToPool: 0, expReal: p.exp });
+            if (s2) inject(V.handler, -1402, s2);
+        }
+    }
+
+    // ══ 世界BOSS / 个人BOSS (猎杀魂兽) ══
+    function getWorldBossMaps() {
+        var maps = [];
+        try {
+            var S = Laya.__classmap['com.game.switchMap.model.SmallMapCfgObj'].ins;
+            var d = S.map || S._data;
+            for (var k in d) {
+                var m = d[k];
+                if (m && m.mapType == 8 && maps.length < 30) maps.push(m.id);
+            }
+        } catch (e) { }
+        if (!maps.length) maps = [20101, 20102, 20103, 20104, 20105];
+        return maps;
+    }
+    HANDLERS[-6005] = function (h) {   // ReqWorldBossMapInfo → ResWorldBossMapInfo
+        log('请求世界BOSS地图信息');
+        var list = [];
+        var maps = getWorldBossMaps();
+        for (var i = 0; i < maps.length; i++) {
+            list.push({ mapId: maps[i], num: 1, maxHP: 1000000, curHP: 1000000, isDead: false, reliveTime: 0, isSetNotify: false, multi: 1 });
+        }
+        var s = writeAuto('com.protocol.worldBoss.ResWorldBossMapInfo', {
+            bossCopyInfos: list, useTime: 0, buyTime: 0, addTime: 0,
+            isFirstOpen: false, isDouble: false, isAuto: false, isOpenNewYearMonster: false
+        });
+        if (s) inject(h, -6001, s);
+    };
+    HANDLERS[-1290] = function (h) {   // CM_PersonalBossCopyInfo → SM_PersonalBossCopyInfo
+        log('请求个人BOSS副本信息');
+        var s = writeAuto('com.x5Protocol.personalboss.message.SM_PersonalBossCopyInfo', {
+            useTime: 0, totalTime: 5, lastRefreshTime: Math.floor(Date.now() / 1000),
+            isDouble: false, sweepMapIds: []
+        });
+        if (s) inject(h, -1291, s);
+    };
+
+    // ══ 商店系统 (神秘商店/金币商店) ══
+    function getShopCfg() {
+        try {
+            var C = Laya.__classmap['com.game.shop.model.ShopCfgObj'];
+            if (C && C.ins) { var d = C.ins.map || C.ins._data; if (d) return d; }
+        } catch (e) { }
+        return null;
+    }
+    // 按 shopLevel 分组挑选商品 (每级8件, 按权重)
+    function buildShopGoods() {
+        var cfg = getShopCfg();
+        if (!cfg) return [];
+        var lv = V.save.player ? V.save.player.level : 1;
+        var byLevel = {};
+        for (var k in cfg) {
+            var g = cfg[k];
+            if (!g || !g.shopLevel) continue;
+            if (g.minLevel && g.minLevel > lv) continue;
+            if (g.maxLevel && g.maxLevel < lv) continue;
+            if (!byLevel[g.shopLevel]) byLevel[g.shopLevel] = [];
+            byLevel[g.shopLevel].push(g);
+        }
+        var out = [];
+        for (var lvl in byLevel) {
+            var arr = byLevel[lvl];
+            arr.sort(function (a, b) { return (b.weight || 0) - (a.weight || 0); });
+            var goods = [];
+            for (var i = 0; i < arr.length && goods.length < 8; i++) {
+                goods.push({ id: parseInt(arr[i].id), isBuy: false });
+            }
+            out.push({ level: parseInt(lvl), goods: goods });
+        }
+        return out;
+    }
+    // 找商品配置
+    function findShopGoods(id) {
+        var cfg = getShopCfg();
+        if (!cfg) return null;
+        for (var k in cfg) {
+            if (parseInt(cfg[k].id) === parseInt(id)) return cfg[k];
+        }
+        return null;
+    }
+    // 背包添加物品 + 推送 ResAddGoods
+    function addItem(itemId, num) {
+        if (!itemId) return;
+        V.save.bag = V.save.bag || {};
+        V.save.bag[itemId] = (V.save.bag[itemId] || 0) + (num || 1);
+        persist();
+        // ResAddGoods {sourceType int, goods: difObject int→bean}
+        var s = new Ser();
+        s.i32(1);                       // sourceType
+        s.u8(0).i32(1);                 // map 标记 + 数量1
+        s.i32(itemId);                  // key: itemModeId
+        s.i32(10);                      // value type id = 10 (Item)
+        s.beanHead();
+        // Item bean: itemModeId,num,state,present,deprecatedTime,trade,createTime,activityGain,isSelfCreate,onlyId
+        s.i32(itemId).i32(num || 1).i32(0).i32(0).l64(0).i32(0).l64(Math.floor(Date.now() / 1000)).i32(0).boolean(false).l64(9000000000 + itemId);
+        inject(V.handler, -1910, s);
+        log('添加物品', itemId, 'x', num, '→ 背包:', V.save.bag[itemId]);
+    }
+    // 解析奖励串 "60107:1" 或 "type:value"
+    function grantReward(rewardsStr) {
+        try {
+            var arr = JSON.parse(rewardsStr);
+            for (var i = 0; i < arr.length; i++) {
+                var r = arr[i];
+                var v = String(r.value || '').split(':');
+                var id = parseInt(v[0]), num = parseInt(v[1] || '1');
+                if (r.type === 'Item' || r.type === 'Gold') {
+                    if (r.type === 'Gold') { V.save.gold += num; }
+                    else addItem(id, num);
+                }
+            }
+        } catch (e) { log('奖励解析失败', rewardsStr, e && e.message); }
+    }
+    // 打开商店
+    HANDLERS[-2701] = function (h) {   // CM_OpenShop → SM_ShowShop
+        log('打开商店');
+        var s = writeAuto('com.protocol.shop.SM_ShowShop', { levelAndGoodsList: buildShopGoods() });
+        if (s) inject(h, -2702, s);
+    };
+    // 购买商品: CM_ShopBuy {level, indexs[]} (writeArray: [00][count][ints...])
+    HANDLERS[-2703] = function (h, body) {
+        var par = new Par(body);
+        var level = par.i32();
+        par.u8();                   // 数组标记 [00]
+        var cnt = par.i32();
+        var ids = [];
+        for (var i = 0; i < cnt; i++) ids.push(par.i32());
+        log('商店购买 level=', level, 'ids=', ids.join(','));
+        var totalGold = 0, totalCoin = 0;
+        for (var i = 0; i < ids.length; i++) {
+            var g = findShopGoods(ids[i]);
+            if (!g) { log('!! 商品不存在', ids[i]); continue; }
+            var gp = parseInt(g.gold || '0') || 0, cp = parseInt(g.coin || '0') || 0;
+            if (gp > 0 && V.save.gold < totalGold + gp) { log('魂币不足'); pushMoney(1, 0, false, false); return; }
+            if (cp > 0 && V.save.coin < totalCoin + cp) { log('金币不足'); pushMoney(2, 0, false, false); return; }
+            totalGold += gp; totalCoin += cp;
+        }
+        // 扣费
+        if (totalGold > 0) {
+            V.save.gold -= totalGold;
+            var s1 = new Ser();
+            s1.i32(1).l64(V.save.gold).boolean(false).l64(totalGold).boolean(false).boolean(true).i32(0);
+            inject(h, -1006, s1);
+        }
+        if (totalCoin > 0) {
+            V.save.coin -= totalCoin;
+            var s2 = new Ser();
+            s2.i32(2).l64(V.save.coin).boolean(false).l64(totalCoin).boolean(false).boolean(true).i32(0);
+            inject(h, -1006, s2);
         }
         persist();
-        setTimeout(pushExploreTasks, 300);
+        // 发货
+        for (var i = 0; i < ids.length; i++) {
+            var g = findShopGoods(ids[i]);
+            if (g && g.rewards) grantReward(g.rewards);
+        }
+        // 回商店状态 (标记已购)
+        var s = writeAuto('com.protocol.shop.SM_ShowShop', { levelAndGoodsList: buildShopGoods() });
+        if (s) setTimeout(function () { inject(h, -2702, s); }, 200);
+    };
+    // 刷新商店: SM_RefreshGoods {levelAndGoods: bean}
+    HANDLERS[-2704] = function (h, body) {
+        var par = new Par(body);
+        var level = par.i32();
+        log('刷新商店 level=', level);
+        var goods = [];
+        var all = buildShopGoods();
+        for (var i = 0; i < all.length; i++) {
+            if (all[i].level === level) { goods = all[i].goods; break; }
+        }
+        var s = writeAuto('com.protocol.shop.SM_RefreshGoods', {
+            levelAndGoods: { level: level, goods: goods }
+        });
+        if (s) inject(h, -2709, s);
+    };
+    // 金币商店(coinShop 充值商城)
+    HANDLERS[-2707] = function (h) {   // ReqOpenCoinShop → ResCoinShopList
+        log('打开金币商城');
+        var s = writeAuto('com.protocol.coinShop.ResCoinShopList', { commodityList: [] });
+        if (s) inject(h, -2708, s);
+    };
+    HANDLERS[-2706] = function (h, body) {  // CM_CoinshopBuy {id, amount}
+        var par = new Par(body);
+        var id = par.i32(), amount = par.i32();
+        log('金币商城购买 id=', id, 'amount=', amount);
+        // 扣金币
+        V.save.coin = Math.max(0, V.save.coin - 1 * (amount || 1));
+        persist();
+        var s = new Ser();
+        s.i32(2).l64(V.save.coin).boolean(false).l64(amount || 1).boolean(false).boolean(true).i32(0);
+        inject(h, -1006, s);
     };
 
     function buildTaskInfoSafe() {
