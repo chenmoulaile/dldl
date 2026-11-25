@@ -12,7 +12,7 @@
 (function () {
     if (window.__DLDL_VSERVER__) return;
     var V = window.__DLDL_VSERVER__ = {
-        version: '2.0',
+        version: '2.2',
         log: [], handler: null, state: 'idle',
         save: null, fakePlayers: [], fakeTimer: 0, chatTimer: 0,
         schemaCache: {}, autoReply: {}, stats: {in: 0, out: 0, unhandled: {}},
@@ -231,8 +231,8 @@
             case 'gold': return V.save ? V.save.gold : 0;
             case 'coin': return V.save ? V.save.coin : 0;
             case 'serverName': case 'orgServerName': return '单机离线服';
-            case 'tmpVipLv': case 'vipLv': return 0;
-            case 'mapId': return p ? p.mapId : 90012;
+            case 'tmpVipLv': case 'vipLv': case 'vipLevel': return 3;   // VIP默认3级
+            case 'mapId': return p ? p.mapId : 30001;
         }
         if (/time$/i.test(name) && (op === 'int' || op === 'long')) return Math.floor(Date.now() / 1000);
         if (/^is|^has|^can|^open|^show|^need/i.test(name) && op === 'boolean') return false;
@@ -455,7 +455,7 @@
             firstLogin: !save.firstLoginDone,
             teamPartnerIds: null,
             mainCityPosition: null,
-            vipInfo: {},                 // 反射默认 → tmpVipLv=0 ✓
+            vipInfo: { tmpVipLv: 3, vipExp: 0, mineDouble: true, throneTrialDouble: true, spiderTrainDouble: true },   // VIP3+部分双倍特权
             newcomerGuideIDs: null,
             newcomerGuideIDs: { __raw: [0xff] },       // null 数组(1字节); 旧版[ff,00]靠goods=null的dif吸收多余字节,现改为纯null
             goods: buildBagDif(), equips: [], jewelInfo: {},
@@ -581,7 +581,7 @@
         V.save.account = account;
         V.save.player = {
             personId: 10001, name: name, job: job || 1, sex: sex || 1,
-            level: 1, exp: 0, mapId: 90012, soulId: 0,   // 觉醒地图
+            level: 1, exp: 0, mapId: 30001, soulId: 0,   // 主城出生(正确流程: 200001老杰克→200003才切图90012觉醒)
             createTime: Math.floor(Date.now() / 1000), battleScore: 0
         };
         persist();
@@ -595,7 +595,7 @@
         V.save.firstLoginDone = true;
         persist();
         V.state = 'ingame';
-        setTimeout(startGMMenu, 2500);
+        setTimeout(startGM, 2500);
         // 兜底: 15s 后地图完成消息仍未到则强制推详情
         setTimeout(function () {
             if (!V._detailSent) { log('兜底推详情'); sendLoginDetail(); }
@@ -1049,6 +1049,86 @@
         if (s) inject(h, -5110, s);
     };
 
+    // ═══════════════ 皇家猎场 (huntinggame) ═══════════════
+    function huntState() {
+        if (!V.save.hunting) V.save.hunting = { layer: 1, inspire: 0, bestLayer: 1 };
+        return V.save.hunting;
+    }
+    function pushHuntingInfo() {
+        var hu = huntState();
+        var s = writeAuto('com.x5Protocol.huntinggame.message.SM_HuntingGamePlayerInfo', {
+            layer: hu.layer, time: 0, group: 1, loops: null, isOpenPanel: true,
+            inspireTimesToday: hu.inspire || 0, inspireDuration: 0, rewardInfos: null
+        });
+        if (s && V.handler) inject(V.handler, -15873, s);
+        var s2 = writeAuto('com.x5Protocol.huntinggame.message.SM_HuntingGameSeasonInfo', {
+            seasonIndex: 1, startTime: Math.floor(Date.now() / 1000) - 864000, stageTimes: null,
+            endTime: Math.floor(Date.now() / 1000) + 86400 * 30, disappear: 0, status: 1, mainServerOpenDays: 365
+        });
+        if (s2 && V.handler) inject(V.handler, -15874, s2);
+    }
+    // 打开猎场面板
+    HANDLERS[-15881] = function (h, body) {
+        log('打开猎场面板');
+        pushHuntingInfo();
+    };
+    // 猎场挑战 (客户端进图演算, 打完上报 -15888)
+    HANDLERS[-15871] = function (h, body) {
+        var par = new Par(body);
+        var id = par.i32();
+        var hu = huntState();
+        hu.fighting = id;
+        log('猎场挑战 id=', id, '当前层数', hu.layer);
+    };
+    // 猎场战斗结算
+    HANDLERS[-15888] = function (h, body) {
+        var hu = huntState();
+        var rewards = {};
+        // 奖励: 昊天令牌x3 + 强化石x5 (Item bean, difObject int→bean)
+        rewards[913] = { typeId: 10, itemModeId: 913, num: 3, state: 0, present: 0, deprecatedTime: 0, trade: 0, createTime: Math.floor(Date.now() / 1000), activityGain: 0, isSelfCreate: false, onlyId: 9000000000 + 913 };
+        rewards[911] = { typeId: 10, itemModeId: 911, num: 5, state: 0, present: 0, deprecatedTime: 0, trade: 0, createTime: Math.floor(Date.now() / 1000), activityGain: 0, isSelfCreate: false, onlyId: 9000000000 + 911 };
+        var s = writeAuto('com.x5Protocol.huntinggame.message.SM_HuntingFightFinish', {
+            reslut: 1, rewards: rewards
+        });
+        if (s) inject(h, -15889, s);
+        // 物品真正入包
+        addItem(913, 3); addItem(911, 5);
+        pushMoney(1, 20000 + hu.layer * 2000, true);   // 金币奖励
+        hu.layer += 1;
+        if (hu.layer > (hu.bestLayer || 1)) hu.bestLayer = hu.layer;
+        persist();
+        setTimeout(pushHuntingInfo, 400);
+        log('猎场结算: 胜利, 进入第', hu.layer, '层');
+    };
+    // 猎场鼓舞
+    HANDLERS[-15887] = function (h, body) {
+        var hu = huntState();
+        hu.inspire = (hu.inspire || 0) + 1;
+        persist();
+        pushHuntingInfo();
+        log('猎场鼓舞 x', hu.inspire);
+    };
+    // 请求猎场宗主
+    HANDLERS[-15883] = function (h, body) {
+        var s = writeAuto('com.x5Protocol.huntinggame.message.SM_ResHuntingGameMaster', {
+            id: 1, starWinner: null, latelyPlayer: null, rank: 1, rankMap: {}
+        });
+        if (s) inject(h, -15884, s);
+    };
+    // 请求猎场排行
+    HANDLERS[-15872] = function (h, body) {
+        var s = writeAuto('com.x5Protocol.huntinggame.message.SM_ResHuntingGameRank', {});
+        if (s) inject(h, -15875, s);
+    };
+    // 猎场跳过
+    HANDLERS[-15890] = function (h, body) {
+        var hu = huntState();
+        var s = writeAuto('com.x5Protocol.huntinggame.message.SM_HuntingSkipInfo', {
+            layer: hu.layer, rewards: null
+        });
+        if (s) inject(h, -15891, s);
+    };
+
     // 主逻辑分发
     function handleRequest(handler, msgId, bodyU8) {
         V.handler = handler;
@@ -1103,7 +1183,7 @@
                 id: f.playerId, curId: f.playerId, name: f.playerName,
                 job: f.job, sex: f.sex, fightScore: f.fightPower,
                 asuramName: f.allianceName || '', level: f.level,
-                changeJob: 0, rebirthLv: 0, vipLevel: 0, honourId: 0, gmLevel: 0,
+                changeJob: 0, rebirthLv: 0, vipLevel: 3, honourId: 0, gmLevel: 0,
                 blueInfo: null, wSoulInfo: null, skinId: 0, plat: '37wan', orgPlat: '37wan',
                 serNum: 1, orgSerNum: 1, titleId: 0, appearVO: null,
                 genderAuth: 0, platformGenderAuth: 0, worldCupCustomName: 0,
@@ -1116,7 +1196,64 @@
         if (s && V.handler) inject(V.handler, -2203, s);
     }
 
-    // ═══════════════ GM 菜单 (DOM) ═══════════════
+    // ═══════════════ GM 菜单 (浏览器DOM + 真机Laya画布双实现) ═══════════════
+    // GM 动作 (两种 UI 共用)
+    function gmAction(a) {
+        var p = V.save.player;
+        if (!p) { gmToast('请先进入游戏'); return; }
+        switch (a) {
+            case 'gold': pushMoney(1, 10000, true); break;
+            case 'goldbig': pushMoney(1, 1000000, true); break;
+            case 'coin': pushMoney(2, 100, true); break;
+            case 'lvl': playerLevelUp(1); break;
+            case 'lvl5': playerLevelUp(5); break;
+            case 'exp': pushExpMax(); break;
+            case 'token': grantHuntTokens(); break;
+            case 'chat':
+                V.save.flags.fakeChat = !V.save.flags.fakeChat;
+                if (V.save.flags.fakeChat) sendFakeChat();
+                gmToast('假人聊天: ' + (V.save.flags.fakeChat ? '开' : '关'));
+                break;
+            case 'save': persist(); gmToast('已保存'); break;
+            case 'reset':
+                V._gmResetArmed = (V._gmResetArmed || 0) + 1;
+                if (V._gmResetArmed >= 2) {
+                    localStorage.removeItem(SAVE_KEY);
+                    location.reload();
+                } else {
+                    gmToast('再点一次[删档重练]确认删档!');
+                    setTimeout(function () { V._gmResetArmed = 0; }, 5000);
+                }
+                break;
+        }
+    }
+    function gmStatText() {
+        var p = V.save.player;
+        if (!p) return '未创建角色';
+        return '角色: ' + p.name + ' Lv.' + p.level + '\n金币: ' + V.save.gold + ' | 钻石: ' + V.save.coin +
+            (V.save.hunting ? ' | 猎场层数: ' + (V.save.hunting.layer || 1) : '');
+    }
+    // 画布版 toast (conch无DOM渲染)
+    function gmToast(msg) {
+        try { console.log('[GM]', msg); } catch (e) {}
+        var L = window.Laya;
+        if (!L || !L.stage) return;
+        if (V._toast) { try { L.stage.removeChild(V._toast); } catch (e) {} }
+        var t = new L.Text();
+        t.text = msg; t.fontSize = 22; t.color = '#ffdf8e'; t.bold = true;
+        t.padding = [6, 10, 6, 10];
+        t.bgColor = 'rgba(20,15,5,0.85)'; t.borderColor = '#c9a34e';
+        t.x = 20; t.y = 60; t.zOrder = 30000;
+        L.stage.addChild(t);
+        V._toast = t;
+        setTimeout(function () { try { L.stage.removeChild(t); if (V._toast === t) V._toast = null; } catch (e) {} }, 2600);
+    }
+    // 启动入口: 按环境选择实现
+    function startGM() {
+        if (window.conch || window.PlatformClass || (window.laya && !document.addEventListener)) startGMMenuCanvas();
+        else startGMMenu();
+    }
+
     function startGMMenu() {
         if (document.getElementById('__gm_btn')) return;
         var css = document.createElement('style');
@@ -1180,33 +1317,81 @@
         function refreshStat() {
             var st = document.getElementById('__gm_stat');
             if (!st || !V.save.player) return;
-            st.innerHTML = '角色: ' + V.save.player.name + ' Lv.' + V.save.player.level +
-                '<br>金币: ' + V.save.gold + ' | 钻石: ' + V.save.coin;
+            st.innerHTML = gmStatText().replace(/\n/g, '<br>');
         }
-        function gmAction(a) {
-            var p = V.save.player;
-            if (!p) { alert('请先进入游戏'); return; }
-            switch (a) {
-                case 'gold': pushMoney(1, 10000, true); break;
-                case 'goldbig': pushMoney(1, 1000000, true); break;
-                case 'coin': pushMoney(2, 100, true); break;
-                case 'lvl': playerLevelUp(1); break;
-                case 'lvl5': playerLevelUp(5); break;
-                case 'exp': pushExpMax(); break;
-                case 'token': grantHuntTokens(); break;
-                case 'chat':
-                    V.save.flags.fakeChat = !V.save.flags.fakeChat;
-                    if (V.save.flags.fakeChat) sendFakeChat();
-                    break;
-                case 'save': persist(); break;
-                case 'reset':
-                    if (confirm('确定删档?角色与资源将清空')) {
-                        localStorage.removeItem(SAVE_KEY);
-                        location.reload();
-                    }
-                    break;
+    }
+
+    // ═══ GM 菜单 (Laya 画布版, conch真机可见) ═══
+    function startGMMenuCanvas() {
+        var L = window.Laya;
+        if (!L || !L.stage) { setTimeout(startGMMenuCanvas, 800); return; }
+        if (V._gmCanvasBuilt) return;
+        V._gmCanvasBuilt = true;
+        var E = L.Event;
+        var sw = L.stage.width, sh = L.stage.height;
+        var scale = Math.min(sw / 750, 1.6);   // 按设计宽度 750 缩放
+        // ── 浮动圆钮 ──
+        var btn = new L.Sprite();
+        var BR = 34;
+        btn.graphics.drawCircle(BR, BR, BR - 2, 'rgba(20,15,5,0.72)', '#c9a34e', 2);
+        var bt = new L.Text();
+        bt.text = 'GM'; bt.fontSize = 26; bt.bold = true; bt.color = '#ffdf8e';
+        bt.width = BR * 2; bt.align = 'center'; bt.y = BR - 16;
+        btn.addChild(bt);
+        btn.size(BR * 2, BR * 2);
+        btn.pos(sw - BR * 2 - 8, sh * 0.36);
+        btn.zOrder = 29000;
+        L.stage.addChild(btn);
+        // ── 面板 ──
+        var pw = Math.min(620, sw - 16), ph = 480;
+        var panel = new L.Sprite();
+        panel.graphics.drawRect(0, 0, pw, ph, 'rgba(20,15,5,0.94)', '#c9a34e', 2);
+        panel.size(pw, ph);
+        panel.pos((sw - pw) / 2, 26);
+        panel.visible = false;
+        panel.zOrder = 29500;
+        L.stage.addChild(panel);
+        var title = new L.Text();
+        title.text = '⚒ 单机助手 v2.2'; title.fontSize = 30; title.bold = true;
+        title.color = '#ffdf8e'; title.width = pw; title.align = 'center'; title.y = 16;
+        panel.addChild(title);
+        var stat = new L.Text();
+        stat.fontSize = 22; stat.color = '#c9b583'; stat.width = pw - 24;
+        stat.x = 12; stat.y = 62; stat.leading = 8;
+        panel.addChild(stat);
+        var rows = [
+            [['金币+1万', 'gold'], ['金币+100万', 'goldbig'], ['钻石+100', 'coin']],
+            [['等级+1', 'lvl'], ['等级+5', 'lvl5'], ['经验满', 'exp']],
+            [['猎场令牌', 'token'], ['聊天开关', 'chat'], ['存档', 'save']],
+            [['删档重练(双击)', 'reset'], ['关闭', '__close']]
+        ];
+        var bw = Math.floor((pw - 24 - 24) / 3), bh = 58;
+        for (var r = 0; r < rows.length; r++) {
+            for (var c = 0; c < rows[r].length; c++) {
+                (function (label, act, x, y) {
+                    var b = new L.Sprite();
+                    b.graphics.drawRoundRect(0, 0, bw, bh, 8, '#3a2f12', '#c9a34e', 1.5);
+                    b.size(bw, bh);
+                    var t = new L.Text();
+                    t.text = label; t.fontSize = 22; t.color = '#ffdf8e';
+                    t.width = bw; t.align = 'center'; t.y = 16;
+                    b.addChild(t);
+                    b.pos(x, y);
+                    panel.addChild(b);
+                    b.on(E.CLICK, b, function () {
+                        if (act === '__close') { panel.visible = false; return; }
+                        gmAction(act);
+                        stat.text = gmStatText();
+                    });
+                })(rows[r][c][0], rows[r][c][1], 12 + c * (bw + 12), 150 + r * (bh + 12));
             }
         }
+        function refresh() { stat.text = gmStatText(); }
+        btn.on(E.CLICK, btn, function () {
+            panel.visible = !panel.visible;
+            if (panel.visible) refresh();
+        });
+        log('GM画布菜单就绪');
     }
 
     // 猎场令牌补给: 按玩家武魂发放对应令牌 x20

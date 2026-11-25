@@ -9,8 +9,9 @@ import sys
 import urllib.request
 import urllib.error
 
-ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tmp', 'h5root')
-ROOT = os.path.normpath(ROOT)
+ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tmp', 'h5root'))
+if not os.path.isfile(os.path.join(ROOT, 'appindex.html')):
+    ROOT = '/home/z/my-project/tmp/h5root'   # 沙箱实际h5root位置
 CDN = 'https://res.xxh5.z7xz.com/xxh5dev/'
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8899
 
@@ -26,7 +27,10 @@ MIME = {
     '.lc': 'application/octet-stream', '.thdata': 'application/octet-stream',
 }
 
-LOG = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tmp', 'testsrv.log'), 'a')
+_LOGDIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tmp'))
+if not os.path.isdir(_LOGDIR):
+    _LOGDIR = '/home/z/my-project/tmp'
+LOG = open(os.path.join(_LOGDIR, 'testsrv.log'), 'a')
 
 
 def log(msg):
@@ -109,7 +113,7 @@ class TS(socketserver.ThreadingTCPServer):
 
 if __name__ == '__main__':
     if not os.path.isdir(ROOT):
-        os.makedirs(ROOT, exist_ok=True)
+        print('h5root 不存在:', ROOT); sys.exit(1)
     print('testsrv: root=%s port=%d cdn=%s' % (ROOT, PORT, CDN))
     with TS(('0.0.0.0', PORT), Handler) as httpd:
         httpd.serve_forever()

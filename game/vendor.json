@@ -1,0 +1,17 @@
+{
+  "_comment": "v2.2 离线包外部依赖: 从CDN按钉死的scrc32拉取, 字节级保证与全量验证过的版本链一致",
+  "base": "https://res.xxh5.z7xz.com/xxh5dev/",
+  "files": [
+    {"path": "GameMain.max_004325.js", "size": 996483, "scrc32": "2ae00607"},
+    {"path": "js/login_001599.js", "size": 576546, "scrc32": "eb91d444"},
+    {"path": "js/main_004827.js", "size": 17151726, "scrc32": "ae8f5c6a"},
+    {"path": "js/module_002279.js", "size": 27820095, "scrc32": "edce2c89"},
+    {"path": "js/skin_000267.js", "size": 758723, "scrc32": "4775222e"},
+    {"path": "files_679txg.bin", "size": 510537, "scrc32": "645f1f3e"},
+    {"path": "files_679txg_mix_pvr.bin", "size": 466148, "scrc32": "06118b68"},
+    {"path": "files_679txg_mix_etc.bin", "size": 462403, "scrc32": "5c4a4f00"},
+    {"path": "files_679txg_etc.bin", "size": 516108, "scrc32": "5460dbbb"},
+    {"path": "files_679txg_pvr.bin", "size": 514570, "scrc32": "6ad86168"},
+    {"path": "bin/config/bytes/newCSV_004227.bytes", "size": 10481101, "scrc32": "614d6b18"}
+  ]
+}
