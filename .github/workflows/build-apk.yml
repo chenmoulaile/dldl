@@ -1,9 +1,9 @@
-name: 构建离线APK v2.2
+name: 构建离线APK v2.3
 on:
   workflow_dispatch: {}
   push:
     branches: [main]
-    paths: ['game/**', 'scripts/patch_offline.py', 'keystore/**', '.github/workflows/build-apk.yml']
+    paths: ['game/**', 'scripts/patch_offline.py', 'scripts/patch_dex_gate.py', 'keystore/**', '.github/workflows/build-apk.yml']
 
 jobs:
   build:
@@ -33,6 +33,16 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;34.0.0" > /dev/null
           echo "$ANDROID_HOME/build-tools/34.0.0" >> $GITHUB_PATH
+
+      - name: 下载 smali 工具 (baksmali/smali 2.5.2 fat jar)
+        run: |
+          curl -sSL -o baksmali.jar https://bitbucket.org/JesusFreke/smali/downloads/baksmali-2.5.2.jar
+          curl -sSL -o smali.jar https://bitbucket.org/JesusFreke/smali/downloads/smali-2.5.2.jar
+          java -jar baksmali.jar --version && java -jar smali.jar --version
+
+      - name: SDK门禁补丁 (绕过37wan启动门禁: 网络检查/隐私弹窗/热更)
+        run: |
+          python3 scripts/patch_dex_gate.py base.apk baksmali.jar smali.jar
 
       - name: 下载版本链文件 (CDN, scrc32字节校验)
         run: |
@@ -67,27 +77,28 @@ jobs:
         run: |
           zipalign -f -p 4 patched.apk aligned.apk
           apksigner sign --ks keystore/dldl.jks --ks-pass pass:dldl123456 \
-            --key-pass pass:dldl123456 --out dldlh5_offline_v2.2.apk aligned.apk
-          apksigner verify --print-certs dldlh5_offline_v2.2.apk | head -5
-          ls -la dldlh5_offline_v2.2.apk
+            --key-pass pass:dldl123456 --out dldlh5_offline_v2.3.apk aligned.apk
+          apksigner verify --print-certs dldlh5_offline_v2.3.apk | head -5
+          ls -la dldlh5_offline_v2.3.apk
 
-      - name: 上传为 v2.2 Release (幂等)
+      - name: 上传为 v2.3 Release (幂等)
         run: |
-          if gh release view v2.2-offline -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+          if gh release view v2.3-offline -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             echo "release 已存在, 上传新资产"
-            gh release upload v2.2-offline dldlh5_offline_v2.2.apk --clobber -R "$GITHUB_REPOSITORY"
+            gh release upload v2.3-offline dldlh5_offline_v2.3.apk --clobber -R "$GITHUB_REPOSITORY"
           else
-            gh release create v2.2-offline dldlh5_offline_v2.2.apk \
-              --title "单机离线版 v2.2 (免登录直进)" \
-              --notes "启动修复: 替换CDN开发登录页为离线启动页, 打开即进游戏
+            gh release create v2.3-offline dldlh5_offline_v2.3.apk \
+              --title "单机离线版 v2.3 (免登录·免网络·开箱即玩)" \
+              --notes "三重门禁全部解除, 打开即进游戏:
 
-          - 免登录: index.html 直启游戏 (跳过37wan/开发服务器列表)
-          - 永离线: 禁用 DCC 网络更新, filetable 重打 (scrc32 校验全对齐)
-          - VIP: 默认3级 + 双倍特权
-          - GM菜单: 画布版(真机可见) 金币/钻石/等级/令牌/聊天开关/删档
-          - 猎场: 皇家猎场协议 (挑战/结算/奖励/排行)
-          - 出生点: 主城30001 (正确剧情流程)
-          - 剧情/商店/假人/货币: 沿用 v2.1 已验证实现" \
+          - 绕过 37wan SDK 启动门禁 (smali补丁): 跳过网络检查/隐私协议弹窗/SDK登录
+          - 屏蔽 SDK 热更杀进程 (在线100秒被杀问题修复)
+          - 离线 (飞行模式) 也能正常进入游戏
+          - 免登录: index 直启游戏, 本地虚拟服务器承担全部服务器功能
+          - 永离线: DCC filetable 重打 (scrc32 校验全对齐), 禁用 CDN 更新
+          - VIP 默认3级 | GM画布菜单(真机可见) | 猎场协议 | 假人聊天
+          - 剧情: 主城出生→老杰克→大师→武魂觉醒五选一→先天满魂力 (手动点击推进)
+          - versionCode 1023 (可直接覆盖安装)" \
               -R "$GITHUB_REPOSITORY"
           fi
         env:
@@ -96,5 +107,5 @@ jobs:
       - name: 上传构建产物 (备用)
         uses: actions/upload-artifact@v4
         with:
-          name: dldlh5-offline-v22-apk
-          path: dldlh5_offline_v2.2.apk
+          name: dldlh5-offline-v23-apk
+          path: dldlh5_offline_v2.3.apk

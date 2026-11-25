@@ -1,6 +1,6 @@
 # MEMORY — 斗罗大陆H5 单机化项目记忆文档
 
-更新: 2026-11-25 09:45 (UTC+8) | 阶段: 【v2.2 已发布】免登录直进修复完成
+更新: 2026-11-25 12:10 (UTC+8) | 阶段: 【v2.3 构建中】三重门禁补丁
 
 ## 一、任务需求(用户) — 验收状态
 1. **免SDK登录直进游戏** ✅ v2.2 根因修复 (详见三)
@@ -72,3 +72,24 @@
 - 断网美术覆盖: APK 576缓存贴图 vs 版本链需求, 模拟器断网截图验证中
 - 排行榜假数据: -15875 空响应(可补); 更多活动面板可按需补 -5109→-5110
 - 剧情小游戏(长按水晶球等)需手动操作(符合原版设计)
+
+## 八、v2.3 追加 (2026-11-25 12:00)
+### 模拟器整机验证结论 (v2.2.4)
+- 在线模式: 游戏完整运行! logcat: "[offline] 启动就绪, 账号: player4910", vserver加载成功
+  但 ~100s 时 37wan SDK 下载热更插件(plugin_301.apk from dlcs.sfhaa.com)后 signal 6 abort 杀进程回桌面
+- 离线模式: SDK 弹"找不到网络"对话框 + 隐私协议弹窗, conch 永远不启动
+### conch JSC 兼容性 (v2.2.3/v2.2.4 踩坑)
+- **不支持 BigInt 字面量**(0x80n) → SyntaxError → vserver整文件加载失败 → 必须纯Number数学
+- **不支持正则 lookbehind** (?<!...) → "Invalid group" → 用"(?:^|[^.\w])消耗前缀"代替
+- CDN 404 的 script 被 conch 以 0 字节"成功"执行(onDownloadError 但 eval 继续) — 谨防静默失败
+### MainActivity 门禁状态机 (smali 逆向, classes.dex)
+- enStepNone→startStep1(init37Sdk+监听器)→[m_isNetOk&&>1s]→startStep2(Laya引擎:RuntimeProxy+GameEngine+set_option gameUrl)
+  →[m_isLayaOk&&m_is37SDKOk]→stepOver(SdkMgr.Init→conch启动)
+- checkNet(): isOpenNetwork()==false→settingNetwork弹窗; true→m_isNetOk=1
+- init37Sdk(): SQwanCore.init(带监听器→m_is37SDKOk) — 隐私弹窗/热更/SDK登录都在这里面
+### v2.3 补丁 (scripts/patch_dex_gate.py)
+- startStep1()V 整体替换 → m_isNetOk=1 + m_is37SDKOk=1 (跳过全部SDK初始化)
+- checkNet()V 整体替换 → m_isNetOk=1; init37Sdk()V 整体替换 → m_is37SDKOk=1 (兜底)
+- 流程: baksmali(fat jar 2.5.2 bitbucket)→patch→smali回编→zip重写
+- presetUrl=appindex.html(非index.html), versionCode 1020→1023
+- 构建链: patch_dex_gate.py(门禁) → patch_offline.py(DCC) → zipalign → apksigner → v2.3-offline release

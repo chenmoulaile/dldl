@@ -24,7 +24,7 @@ jobs:
       - name: 下载 v2.2 APK
         run: |
           for i in 1 2 3 4 5; do
-            gh release download v2.2-offline -R "$GITHUB_REPOSITORY" -p '*.apk' -O /tmp/app.apk && break
+            gh release download v2.3-offline -R "$GITHUB_REPOSITORY" -p '*.apk' -O /tmp/app.apk && break
             echo "retry $i"; sleep 10
           done
           ls -la /tmp/app.apk

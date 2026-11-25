@@ -8,7 +8,7 @@
 2. filetable.txt/bin 重新生成: 原有 561 条目保留 + 全部新文件条目 (scrc32 verhash)
 3. assetsid.txt 更新 → 首启触发 setAssets 重新拷贝 filetable 到本地
 4. assets/scripts/index.js: updateDcc() 调用改 null (禁用 CDN filetable 覆盖, 永离线)
-5. AndroidManifest versionCode 1020 → 1022 (可覆盖安装)
+5. AndroidManifest versionCode 1020 → 1023 (可覆盖安装)
 """
 import sys, os, json, zlib, struct, zipfile, shutil, hashlib
 
@@ -50,7 +50,7 @@ def patch_index_js(data):
 
 
 def patch_version_code(manifest):
-    """AndroidManifest 二进制 AXML: versionCode 1020 → 1022
+    """AndroidManifest 二进制 AXML: versionCode 1020 → 1023
     versionCode 是整型属性: 直接改 manifest 元素属性的 data 字段(u32), 同时改raw字符串"""
     d = bytearray(manifest)
     if struct.unpack('<H', d[0:2])[0] != 0x0003:
@@ -92,7 +92,7 @@ def patch_version_code(manifest):
                 if a + 20 > len(d):
                     break
                 if u32(a + 4) == vc_idx and u32(a + 16) == 1020:
-                    struct.pack_into('<I', d, a + 16, 1022)
+                    struct.pack_into('<I', d, a + 16, 1023)
                     patched += 1
         pos += csize
 
@@ -103,7 +103,7 @@ def patch_version_code(manifest):
             p = pool_off + sstart + off
             ln = u16(p)
             if ln == 4:
-                d[p + 4:p + 6] = b'2\x002'
+                d[p + 4:p + 6] = b'2\x003'   # "1020" → "1023"
     return bytes(d), patched >= 1
 
 
@@ -210,7 +210,7 @@ def main():
 
     mf_data = zin.read('AndroidManifest.xml')
     mf_new, ok = patch_version_code(mf_data)
-    print('AndroidManifest versionCode 1020→1022:', 'OK' if ok else '未命中(跳过)')
+    print('AndroidManifest versionCode 1020→1023:', 'OK' if ok else '未命中(跳过)')
 
     # ── 重写 ZIP ──
     inject_names = set(CDN_DIR + '/' + h for h in inject_map)
