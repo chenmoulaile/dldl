@@ -378,6 +378,8 @@
         '这服务器延迟好低', '回归玩家报道', '一区老大路过'];
     var JOBS = [1, 2, 3, 4, 5, 6, 7];
 
+    // 主城出生点附近 (玩家实际出生 3525,2825)
+    var CITY_BORN = { x: 3525, y: 2825 };
     function mkFake(pid, idx) {
         var name = FAKE_NAMES[idx % FAKE_NAMES.length];
         if (idx >= FAKE_NAMES.length) name += Math.floor(idx / FAKE_NAMES.length);
@@ -385,7 +387,8 @@
             playerId: pid, playerName: name, job: JOBS[idx % JOBS.length],
             sex: (idx % 2) + 1, level: 20 + (idx * 13) % 230,
             fightPower: 50000 + idx * 41333,
-            x: 300 + ((idx * 137) % 1400), y: 300 + ((idx * 251) % 800),
+            x: CITY_BORN.x - 700 + ((idx * 173) % 1400),
+            y: CITY_BORN.y - 500 + ((idx * 291) % 1000),
             allianceName: idx % 3 === 0 ? '史莱克学院' : (idx % 3 === 1 ? '武魂殿' : ''),
             titleId: 0, horseId: idx % 5,
             vx: (idx % 2 ? 1 : -1) * (1 + idx % 3), vy: (idx % 3 ? 1 : -1) * (1 + idx % 2)
@@ -1076,8 +1079,8 @@
             if (!f) return;
             f.x += f.vx * (2 + Math.floor(Math.random() * 4));
             f.y += f.vy * (2 + Math.floor(Math.random() * 4));
-            if (f.x < 100 || f.x > 1800) f.vx = -f.vx;
-            if (f.y < 100 || f.y > 1000) f.vy = -f.vy;
+            if (f.x < CITY_BORN.x - 800 || f.x > CITY_BORN.x + 800) f.vx = -f.vx;
+            if (f.y < CITY_BORN.y - 600 || f.y > CITY_BORN.y + 600) f.vy = -f.vy;
             inject(V.handler, ID.SM_PLAYER_MOVE, buildPlayerMove(f));
         }, 1800);
     }
@@ -1089,21 +1092,28 @@
         }, 9000);
     }
     function sendFakeChat() {
-        // 找聊天 SM 消息并注入 (在初始化后动态发现)
-        var chatCls = 'com.x5Protocol.chat.message.SM_ChatMessage';
         var f = V.fakePlayers[Math.floor(Math.random() * V.fakePlayers.length)];
         if (!f) return;
         var line = CHAT_LINES[Math.floor(Math.random() * CHAT_LINES.length)];
-        var ops = reflect(chatCls);
-        if (!ops) { V.save.flags.fakeChat = false; return; }
-        var s = new Ser();
-        writeOps(s, ops, {
-            playerId: f.playerId, playerName: f.playerName,
-            content: line, chatType: 1, vipLv: 0
+        // SM_Chat(-2203): channelId, content, sender(ChatSender bean), reciver, reciverPlayerId,
+        // reciverServerId, createTime, params[], colorId, bgColorId, chatBadgeId, hasSend
+        var s = writeAuto('com.protocol.chat.msg.SM_Chat', {
+            channelId: 1, content: line,
+            sender: {
+                id: f.playerId, curId: f.playerId, name: f.playerName,
+                job: f.job, sex: f.sex, fightScore: f.fightPower,
+                asuramName: f.allianceName || '', level: f.level,
+                changeJob: 0, rebirthLv: 0, vipLevel: 0, honourId: 0, gmLevel: 0,
+                blueInfo: null, wSoulInfo: null, skinId: 0, plat: '37wan', orgPlat: '37wan',
+                serNum: 1, orgSerNum: 1, titleId: 0, appearVO: null,
+                genderAuth: 0, platformGenderAuth: 0, worldCupCustomName: 0,
+                championShipGamer: 0, legionShowVO: null
+            },
+            reciver: '', reciverPlayerId: 0, reciverServerId: 0,
+            createTime: Math.floor(Date.now() / 1000),
+            params: [], colorId: 0, bgColorId: 0, chatBadgeId: 0, hasSend: false
         });
-        var smId = null;
-        for (var k in IDMAP) if (IDMAP[k] === 'SM_ChatMessage') { smId = Number(k); break; }
-        if (smId && V.handler) inject(V.handler, smId, s);
+        if (s && V.handler) inject(V.handler, -2203, s);
     }
 
     // ═══════════════ GM 菜单 (DOM) ═══════════════
