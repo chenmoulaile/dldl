@@ -40,7 +40,7 @@ jobs:
           curl -sSL -o smali.jar https://bitbucket.org/JesusFreke/smali/downloads/smali-2.5.2.jar
           java -jar baksmali.jar --version && java -jar smali.jar --version
 
-      - name: SDK门禁补丁 (绕过37wan启动门禁: 网络检查/隐私弹窗/热更)
+      - name: SDK门禁补丁 (绕过37wan启动门禁 网络检查/隐私弹窗/热更)
         run: |
           python3 scripts/patch_dex_gate.py base.apk baksmali.jar smali.jar
 
