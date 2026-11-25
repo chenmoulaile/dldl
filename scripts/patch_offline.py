@@ -234,9 +234,16 @@ def main():
             elif n in inject_names:
                 h = n[len(CDN_DIR) + 1:]
                 zout.write(inject_map[h], n)
-                print('  [注入] %s (%s)' % (n, os.path.basename(inject_map[h])))
+                print('  [替换] %s (%s)' % (n, os.path.basename(inject_map[h])))
             else:
                 zout.writestr(item, zin.read(n))
+        # ── 关键: 新增 APK 里不存在的哈希条目 (v2.2曾遗漏导致全部走CDN!) ──
+        existing = set(names)
+        for h in sorted(inject_map):
+            entry = CDN_DIR + '/' + h
+            if entry not in existing:
+                zout.write(inject_map[h], entry)
+                print('  [新增] %s (%d B)' % (entry, os.path.getsize(inject_map[h])))
     zin.close()
     print('输出:', out_apk, os.path.getsize(out_apk), 'bytes')
 

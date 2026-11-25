@@ -48,10 +48,17 @@ jobs:
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
 
-      - name: 安装并启动游戏 (联网模式)
+      - name: 安装并预授权 (避免权限弹窗挡画面)
         run: |
           adb install -r /tmp/app.apk
-          adb shell monkey -p com.jiguang.dldl.sy37 -c android.intent.category.LAUNCHER 1
+          adb shell pm grant com.jiguang.dldl.sy37 android.permission.READ_EXTERNAL_STORAGE || true
+          adb shell pm grant com.jiguang.dldl.sy37 android.permission.WRITE_EXTERNAL_STORAGE || true
+          adb shell pm grant com.jiguang.dldl.sy37 android.permission.READ_PHONE_STATE || true
+          adb shell pm grant com.jiguang.dldl.sy37 android.permission.CAMERA || true
+
+      - name: 启动游戏 (联网模式)
+        run: |
+          adb shell am start -n com.jiguang.dldl.sy37/com.jiguang.main.MainActivity
           sleep 8
           # 首启隐私协议: 点"同意" (pixel_4 1080x2280, x=73% y=87.5%)
           adb shell input tap 788 1995
@@ -72,8 +79,10 @@ jobs:
           adb shell cmd connectivity airplane-mode enable
           sleep 3
           adb shell am force-stop com.jiguang.dldl.sy37
-          sleep 2
-          adb shell monkey -p com.jiguang.dldl.sy37 -c android.intent.category.LAUNCHER 1
+          sleep 3
+          adb shell am start -n com.jiguang.dldl.sy37/com.jiguang.main.MainActivity
+          sleep 5
+          adb shell am start -n com.jiguang.dldl.sy37/com.jiguang.main.MainActivity
           for i in $(seq 1 15); do
             sleep 10
             adb exec-out screencap -p > shots/off_$(printf %02d $i).png
