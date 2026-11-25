@@ -258,6 +258,7 @@
             else if (it.op === 'string') { s.str(v !== undefined ? v : (defaultFor(it.f, 'string') || '')); }
             else if (it.op === 'double') { s.l64(v || 0); }
             else if (it.op === 'bean') {
+                if (v && v.__raw) { for (var ri = 0; ri < v.__raw.length; ri++) s.u8(v.__raw[ri]); continue; }
                 if (v === null) { s.beanNull(); continue; }
                 var beanCls = it.args[0];
                 var bops = (beanCls && typeof beanCls === 'string') ? reflect(beanCls) : null;
@@ -276,18 +277,29 @@
                 if (o === null || o === undefined) { s.u8(0xff); continue; }
                 var keys = Object.keys(o);
                 s.u8(0); s.i32(keys.length);
+                var isDifBean = (it.op === 'dif') && (String(it.args[3] || '').replace(/"/g, '') === 'bean');
                 for (var ki = 0; ki < keys.length; ki++) {
                     var kv = keys[ki];
                     var kt = (it.args[0] || 'int').replace(/"/g, '');
                     writePrimitive(s, kt, kv);
-                    var vt = (it.args[2] || it.args[1] || 'int').replace(/"/g, '');
                     var vv = o[kv];
-                    if (vt === 'bean') {
-                        var vc = (it.op === 'dif') ? (it.args[4] || '') : (it.args[3] || '');
-                        var vops = reflect(vc);
-                        if (vops) { s.beanHead(); writeOps(s, vops, vv || {}, depth + 1); }
-                        else s.beanNull();
-                    } else writePrimitive(s, vt, vv);
+                    if (isDifBean) {
+                        // dif→bean: [present][typeId][beanMark][fields]
+                        if (vv === null || vv === undefined) { s.u8(0xff); continue; }
+                        s.u8(0);
+                        s.i32((vv && vv.typeId) || 10);   // 默认 Item
+                        s.u8(0);
+                        var iops = reflect('com.protocol.bag.bean.Item');
+                        if (iops) writeOps(s, iops, vv, depth + 1);
+                    } else {
+                        var vt = (it.args[2] || it.args[1] || 'int').replace(/"/g, '');
+                        if (vt === 'bean') {
+                            var vc = (it.op === 'dif') ? (it.args[4] || '') : (it.args[3] || '');
+                            var vops = reflect(vc);
+                            if (vops) { s.beanHead(); writeOps(s, vops, vv || {}, depth + 1); }
+                            else s.beanNull();
+                        } else writePrimitive(s, vt, vv);
+                    }
                 }
             } else if (it.item) { // 手写循环体条目
                 writeItem(s, it.args, v, depth);
@@ -405,6 +417,21 @@
     }
 
     // 登录详情: 用反射自动对齐 107 字段 (杜绝手工错位)
+    // 构造背包 dif 数据 (int→bean ITEM_MAP): 每项 {typeId, itemModeId, num...}
+    function buildBagDif() {
+        var bag = (V.save && V.save.bag) || {};
+        var out = {};
+        for (var k in bag) {
+            if (!bag[k]) continue;
+            out[k] = {
+                typeId: 10, itemModeId: Number(k) || 0, num: bag[k],
+                state: 0, present: 0, deprecatedTime: 0, trade: 0,
+                createTime: Math.floor(Date.now() / 1000), activityGain: 0,
+                isSelfCreate: false, onlyId: 9000000000 + Number(k)
+            };
+        }
+        return out;
+    }
     function buildLoginDetail(save) {
         var p = save.player;
         var ov = {
@@ -427,9 +454,9 @@
             mainCityPosition: null,
             vipInfo: {},                 // 反射默认 → tmpVipLv=0 ✓
             newcomerGuideIDs: null,
-            newcomerGuideIDs: { __raw: [0xff, 0x00] },  // 迭代验证的布局
-            goods: null, equips: [], jewelInfo: {},
-            tinyMailsInfo: {},   // 空 map 语义, handler 判 null 跳过
+            newcomerGuideIDs: { __raw: [0xff] },       // null 数组(1字节); 旧版[ff,00]靠goods=null的dif吸收多余字节,现改为纯null
+            goods: buildBagDif(), equips: [], jewelInfo: {},
+            tinyMailsInfo: { __raw: [0x00, 0x00, 0x00] },  // 手写循环bean: [beanMark][mapMark][count=0] 共3字节!
             equipGrids: 60, warehouseCount: 60, countryId: 0,
             expPoolInfo: {}, monthCardType: 0,
             openServerDay: 1, activity: 0,
@@ -449,7 +476,23 @@
         var pov = {
             personId: p.personId, playerName: p.name, job: p.job, level: p.level,
             exp: p.exp || 0, transferJob: 0, rebirthLv: 0,
-            attributeVo: {}, skillVo: {}, buffEffectsVo: null, fruitObj: null,
+            // 战斗属性 (客户端本地计算战斗): MAXHP=6,ATK=9,DEFENSE=15,HIT=18,DODGE=19,ATTACKSPEED=16,RUNSPEED=25
+            attributeVo: {
+                attribute: (function (lv) {
+                    return {
+                        6: 1000 + lv * 800,       // MAXHP
+                        9: 80 + lv * 60,          // ATK
+                        15: 40 + lv * 30,         // DEFENSE
+                        18: 60 + lv * 6,          // HIT
+                        19: 15 + lv * 3,          // DODGE
+                        16: 800,                  // ATTACKSPEED
+                        25: 300,                  // RUNSPEED
+                        22: 5                     // PERFECTATTACK
+                    };
+                })(p.level || 1),
+                attributeBuff: {}
+            },
+            skillVo: {}, buffEffectsVo: null, fruitObj: null,
             jobType: 0, taskEntry: null, expiredTime: 0,
             battleScore: p.battleScore || 0, starLv: 0,
             createTime: p.createTime, elementInfo: null, wSoulInfo: { playerSoulInfo: {} },   // 空 map (action 需非null)
@@ -763,6 +806,15 @@
         for (var i = 0; i < maps.length; i++) {
             list.push({ mapId: maps[i], num: 1, maxHP: 1000000, curHP: 1000000, isDead: false, reliveTime: 0, isSetNotify: false, multi: 1 });
         }
+        // 当前地图若不在列表中且是猎场/BOSS类地图(20xxx), 也加入 (皇家猎场 20805 等靠此刷BOSS)
+        var curMap = V.save.player ? V.save.player.mapId : 0;
+        if (curMap && curMap >= 20000 && curMap < 21000) {
+            var has = false;
+            for (var i = 0; i < list.length; i++) if (list[i].mapId === curMap) { has = true; break; }
+            if (!has) {
+                list.unshift({ mapId: curMap, num: 1, maxHP: 50000, curHP: 50000, isDead: false, reliveTime: 0, isSetNotify: false, multi: 1 });
+            }
+        }
         var s = writeAuto('com.protocol.worldBoss.ResWorldBossMapInfo', {
             bossCopyInfos: list, useTime: 0, buyTime: 0, addTime: 0,
             isFirstOpen: false, isDouble: false, isAuto: false, isOpenNewYearMonster: false
@@ -822,18 +874,19 @@
         return null;
     }
     // 背包添加物品 + 推送 ResAddGoods
+    // difObject(int→bean, ITEM_MAP) 格式: [key][present=0][typeId][beanMark=0][Item字段...]
     function addItem(itemId, num) {
         if (!itemId) return;
         V.save.bag = V.save.bag || {};
         V.save.bag[itemId] = (V.save.bag[itemId] || 0) + (num || 1);
         persist();
-        // ResAddGoods {sourceType int, goods: difObject int→bean}
         var s = new Ser();
         s.i32(1);                       // sourceType
         s.u8(0).i32(1);                 // map 标记 + 数量1
         s.i32(itemId);                  // key: itemModeId
-        s.i32(10);                      // value type id = 10 (Item)
-        s.beanHead();
+        s.u8(0);                        // bean present 标记
+        s.i32(10);                      // typeId = 10 (Item)
+        s.u8(0);                        // readBean 标记
         // Item bean: itemModeId,num,state,present,deprecatedTime,trade,createTime,activityGain,isSelfCreate,onlyId
         s.i32(itemId).i32(num || 1).i32(0).i32(0).l64(0).i32(0).l64(Math.floor(Date.now() / 1000)).i32(0).boolean(false).l64(9000000000 + itemId);
         inject(V.handler, -1910, s);
@@ -1084,8 +1137,11 @@
             '<div class="gmbtn" data-a="exp">经验满</div>' +
             '</div>' +
             '<div class="gmrow">' +
+            '<div class="gmbtn" data-a="token">猎场令牌</div>' +
             '<div class="gmbtn" data-a="chat">聊天:开</div>' +
             '<div class="gmbtn" data-a="save">存档</div>' +
+            '</div>' +
+            '<div class="gmrow">' +
             '<div class="gmbtn" data-a="reset">删档重练</div>' +
             '</div>';
         document.body.appendChild(btn);
@@ -1120,6 +1176,7 @@
                 case 'lvl': playerLevelUp(1); break;
                 case 'lvl5': playerLevelUp(5); break;
                 case 'exp': pushExpMax(); break;
+                case 'token': grantHuntTokens(); break;
                 case 'chat':
                     V.save.flags.fakeChat = !V.save.flags.fakeChat;
                     if (V.save.flags.fakeChat) sendFakeChat();
@@ -1135,17 +1192,31 @@
         }
     }
 
+    // 猎场令牌补给: 按玩家武魂发放对应令牌 x20
+    function grantHuntTokens() {
+        var TOKEN_BY_WSOUL = {
+            13: 913,   // 昊天锤
+            12: 922, 11: 925, 15: 933, 17: 911, 16: 912,
+            14: 921, 18: 931, 19: 923, 20: 932, 21: 915, 22: 916, 23: 914, 24: 917
+        };
+        var p = V.save.player;
+        var sid = p && p.soulId;
+        var token = TOKEN_BY_WSOUL[sid] || 913;   // 默认昊天令牌
+        addItem(token, 20);
+        // 同时补几张其它令牌方便体验
+        var extra = [922, 925, 933];
+        for (var i = 0; i < extra.length; i++) if (extra[i] !== token) addItem(extra[i], 5);
+        log('猎场令牌补给完成, 武魂', sid, '→令牌', token);
+    }
+
     function playerLevelUp(n) {
         var p = V.save.player;
         p.level = Math.min(999, p.level + n);
         persist();
-        // SM_LevelUp_8602 反射推送
-        var s = writeAuto('com.x5Protocol.player.message.SM_LevelUp_8602', {
-            level: p.level, exp: p.exp || 0
-        });
-        var smId = null;
-        for (var k in IDMAP) if (IDMAP[k] === 'SM_LevelUp_8602') { smId = Number(k); break; }
-        if (smId && s && V.handler) inject(V.handler, smId, s);
+        // 正确的玩家等级更新消息
+        var s = writeAuto('com.protocol.player.msg.ResLevelUpdateMessage',
+            { level: p.level, addexp: 0, exp: p.exp || 0, personID: p.personId });
+        if (s && V.handler) inject(V.handler, -1401, s);
     }
     function pushExpMax() {
         var p = V.save.player;
@@ -1204,4 +1275,9 @@
     V.reflect = reflect;
     V.pushMoney = pushMoney;
     V.writeOps = writeOps;
+    V.addItem = addItem;
+    V.addExp = addExp;
+    V.grantHuntTokens = grantHuntTokens;
+    V.pushExploreTasks = pushExploreTasks;
+    V.pushFunctionButtons = pushFunctionButtons;
 })();
