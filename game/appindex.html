@@ -53,34 +53,45 @@ var filetable = "update/filetable_679txg.bin";
     document.head.appendChild(s);
   }
   function start() {
-    try {
-      // ===== 离线参数 (替代 37wan/开发页登录) =====
-      var P = window.app.Params;
-      var save = null;
-      try { save = JSON.parse(localStorage.getItem('dldl_save_v2') || 'null'); } catch (e) {}
-      if (!save) save = { account: 'player' + Math.floor(1000 + Math.random() * 9000) };
-      P.userAccount = save.account;
-      P.IP = '127.0.0.1';
-      P.PORT = 10086;
-      P.OP = '37wan';
-      P.SERVER = 1;
-      P.REFERER = '37wan';
-      P.TIME = Math.floor(Date.now() / 1000);
-      P.SIGN = 'offline';
-      P.zoneid = 1;
-      P.gid = 'local';
-      P.PID = '1_1004816_12530_1001';
-      P.serverName = '单机离线服';
-      P.isPcLaunch = false;
-      P.CDN_LIST = ['https://res.xxh5.z7xz.com/xxh5dev/'];
-      console.log('[offline] 启动就绪, 账号: ' + save.account);
-      // ===== 直接进游戏 (跳过平台SDK/服务器列表) =====
-      new com.Game();
-      com.Game.gameCaller.init();
-    } catch (e) {
-      console.log('[offline] 启动失败: ' + (e && e.message));
-      alert('游戏启动失败: ' + (e && e.message));
-    }
+    // 就绪轮询: conch 动态脚本 onload 时序与浏览器不同, 引擎可能晚几秒才就绪
+    var tries = 0;
+    (function go() {
+      tries++;
+      if (window.com && window.com.Game) {
+        try {
+          // ===== 离线参数 (替代 37wan/开发页登录) =====
+          var P = window.app.Params;
+          var save = null;
+          try { save = JSON.parse(localStorage.getItem('dldl_save_v2') || 'null'); } catch (e) {}
+          if (!save) save = { account: 'player' + Math.floor(1000 + Math.random() * 9000) };
+          P.userAccount = save.account;
+          P.IP = '127.0.0.1';
+          P.PORT = 10086;
+          P.OP = '37wan';
+          P.SERVER = 1;
+          P.REFERER = '37wan';
+          P.TIME = Math.floor(Date.now() / 1000);
+          P.SIGN = 'offline';
+          P.zoneid = 1;
+          P.gid = 'local';
+          P.PID = '1_1004816_12530_1001';
+          P.serverName = '单机离线服';
+          P.isPcLaunch = false;
+          P.CDN_LIST = ['https://res.xxh5.z7xz.com/xxh5dev/'];
+          console.log('[offline] 启动就绪, 账号: ' + save.account);
+          // ===== 直接进游戏 (跳过平台SDK/服务器列表) =====
+          new com.Game();
+          com.Game.gameCaller.init();
+        } catch (e) {
+          console.log('[offline] 启动失败: ' + (e && e.message));
+          alert('游戏启动失败: ' + (e && e.message));
+        }
+      } else if (tries < 900) {
+        setTimeout(go, 100);
+      } else {
+        alert('游戏启动失败: 核心引擎未就绪 (com.Game 缺失)');
+      }
+    })();
   }
   next();
 })();
