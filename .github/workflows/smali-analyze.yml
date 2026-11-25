@@ -27,7 +27,7 @@ jobs:
 
       - name: 解码 (跳过资源, 只要smali)
         run: |
-          java -jar apktool.jar d -f --no-res --only-main-classes base.apk out || true
+          java -jar apktool.jar d -f --no-res base.apk -o out || true
           ls out/
           ls out/smali*/ | head -20
           find out -name "MainActivity*.smali" | head
