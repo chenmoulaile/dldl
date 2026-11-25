@@ -1,0 +1,74 @@
+name: 构建离线APK
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths: ['game/**', 'scripts/patch_dcc.py', 'keystore/**']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 下载基础APK (v2.0)
+        run: |
+          gh release download v2.0-offline -R "$GITHUB_REPOSITORY" -p '*.apk' -O base.apk
+          ls -la base.apk
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: 设置 Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 安装 Android 构建工具
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;34.0.0" > /dev/null
+          echo "$ANDROID_HOME/build-tools/34.0.0" >> $GITHUB_PATH
+
+      - name: 注入更新文件到 DCC 缓存
+        run: |
+          python3 scripts/patch_dcc.py base.apk game/
+
+      - name: 对齐并签名
+        run: |
+          zipalign -f -p 4 base.apk aligned.apk
+          apksigner sign --ks keystore/dldl.jks --ks-pass pass:dldl123456 \
+            --key-pass pass:dldl123456 --out dldlh5_offline_v2.1.apk aligned.apk
+          apksigner verify --print-certs dldlh5_offline_v2.1.apk | head -5
+          ls -la dldlh5_offline_v2.1.apk
+
+      - name: 上传为 v2.1 Release (幂等)
+        run: |
+          if gh release view v2.1-offline -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "release 已存在, 上传新资产"
+            gh release upload v2.1-offline dldlh5_offline_v2.1.apk --clobber -R "$GITHUB_REPOSITORY"
+          else
+            gh release create v2.1-offline dldlh5_offline_v2.1.apk \
+              --title "单机离线版 v2.1" \
+              --notes "自动构建: 剧情链/武魂觉醒/商店购买/假人聊天/货币系统 全部修复
+
+          - 剧情: 200001-200010 全通 (客户端配置驱动), 武魂觉醒五选一
+          - 商店: 购买扣费+物品入包闭环, 余额不足拦截
+          - 货币: 三货币正常显示(修复负数bug), 任务奖励发放
+          - 假人: 主城22个假人游走 + 世界聊天每9秒
+          - GM菜单: 金币/钻石/等级/猎场令牌/聊天开关/删档
+          - 猎场: 皇家猎场面板+引导, 令牌消耗进入" \
+              -R "$GITHUB_REPOSITORY"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: 上传构建产物 (备用)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dldlh5-offline-apk
+          path: dldlh5_offline_v2.1.apk
