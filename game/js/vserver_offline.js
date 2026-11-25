@@ -76,12 +76,13 @@
     }
 
     // ═══════════════ 序列化助手 (Bean规范: varint+zigzag) ═══════════════
+    // 注意: conch 的 JSC 不支持 BigInt 字面量, 全部用 Number 数学 (值域 <2^53)
     function zz32(v) { v = v | 0; return ((v << 1) ^ (v >> 31)) >>> 0; }
     function varintBytes(u) {
-        u = BigInt(u);
+        u = Math.floor(Number(u) || 0);
         var out = [];
-        while (u >= 0x80n) { out.push(Number(u & 0x7fn) | 0x80); u >>= 7n; }
-        out.push(Number(u));
+        while (u >= 0x80) { out.push((u % 128) | 0x80); u = Math.floor(u / 128); }
+        out.push(u);
         return out;
     }
     function Ser() { this.bytes = []; }
@@ -89,8 +90,9 @@
     Ser.prototype.i32 = function (v) { var b = varintBytes(zz32(v)); for (var i = 0; i < b.length; i++) this.bytes.push(b[i]); return this; };
     Ser.prototype.i16 = function (v) { v = v | 0; this.bytes.push((v >>> 8) & 0xff, v & 0xff); return this; };
     Ser.prototype.l64 = function (n) {
-        n = BigInt(Math.floor(n || 0));
-        var z = (n < 0n) ? (((n * 2n) ^ 0xFFFFFFFFFFFFFFFFn) & 0xFFFFFFFFFFFFFFFFn) : ((n * 2n) & 0xFFFFFFFFFFFFFFFFn);
+        n = Math.floor(Number(n) || 0);
+        var z = n < 0 ? (-n * 2 - 1) : (n * 2);   // zigzag64 (Number版, 值域<2^53)
+        if (z < 0 || !isFinite(z)) z = 0;
         var b = varintBytes(z);
         for (var i = 0; i < b.length; i++) this.bytes.push(b[i]);
         return this;
@@ -126,9 +128,9 @@
     Par.prototype.u8 = function () { return this.d[this.p++]; };
     Par.prototype.i16 = function () { var v = (this.d[this.p] << 8) | this.d[this.p + 1]; this.p += 2; return v; };
     Par.prototype.l64 = function () {
-        var u = 0n, s = 0n, b;
-        do { b = this.d[this.p++]; u |= BigInt(b & 0x7f) << s; s += 7n; } while (b & 0x80);
-        return Number((u >> 1n) ^ (-(u & 1n) & 0xFFFFFFFFFFFFFFFFn));
+        var u = 0, s = 1, b;
+        do { b = this.d[this.p++]; u += (b & 0x7f) * s; s *= 128; } while (b & 0x80);
+        return (u % 2 === 0) ? (u / 2) : (-(u + 1) / 2);   // unzigzag
     };
     Par.prototype.str = function () {
         var n = this.i32();
