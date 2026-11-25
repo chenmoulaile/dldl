@@ -1,0 +1,77 @@
+name: 安卓模拟器整机测试
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths: ['.github/workflows/emulator-test.yml']
+
+jobs:
+  emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 启用KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: 下载APK (Release)
+        run: |
+          gh release download v2.0-offline -R "$GITHUB_REPOSITORY" -p '*.apk' -O /tmp/app.apk
+          ls -la /tmp/app.apk
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: 安装 Android 工具
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "system-images;android-30;google_apis;x86_64" "platform-tools" > /dev/null
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n test -k "system-images;android-30;google_apis;x86_64" -d pixel_4
+
+      - name: 启动模拟器
+        run: |
+          EMU=$ANDROID_HOME/emulator/emulator
+          $EMU -avd test -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 3072 -accel on &
+          adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 2; done; echo BOOTED'
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+
+      - name: 安装并启动游戏
+        run: |
+          adb install -r /tmp/app.apk
+          # 找出包名
+          PKG=$(adb shell pm list packages | grep -iE 'dldl|xxh5|laya|game' | head -1 | sed 's/package://;s/\r//')
+          echo "检测到包名: $PKG"
+          if [ -z "$PKG" ]; then adb shell pm list packages | head -40; exit 1; fi
+          echo "PKG=$PKG" >> $GITHUB_ENV
+          adb shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 || adb shell am start -n "$PKG/com.plugin.core.ProxyPluginActivity"
+
+      - name: 等待游戏加载并截图
+        run: |
+          mkdir -p shots
+          for i in $(seq 1 12); do
+            sleep 10
+            adb exec-out screencap -p > shots/shot_$(printf %02d $i).png
+            echo "--- 第${i}0秒截图完成 ---"
+          done
+
+      - name: 抓取游戏日志
+        if: always()
+        run: |
+          adb logcat -d > shots/logcat.txt 2>&1 || true
+          grep -aiE 'vserver|offline|dldl|conch|laya' shots/logcat.txt | head -100 > shots/game_log.txt || true
+
+      - name: 上传截图与日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-screenshots
+          path: shots/
+
+      - name: 停止模拟器
+        if: always()
+        run: adb emu kill || true
