@@ -165,7 +165,8 @@
     var READ_OPS = 'readByte|readShort|readInt|readLong|readString|readBoolean|readDouble|readFloat|readBean1|readBean|readArray|readObject|readDifObject|readNestObject';
     var RE_NAMED = new RegExp('this\\.(\\w+)\\s*=\\s*this\\.(' + READ_OPS + ')\\(\\s*([^)]*)\\)', 'g');
     // 无名/临时变量读取: 排除 this.xxx= 形式(前面是 . 或字母)
-    var RE_TEMP = new RegExp('(?<![.\\w])(?:var\\s+)?(\\w+)\\s*=\\s*this\\.(readByte|readShort|readInt|readLong|readString|readBoolean|readDouble|readBean1|readBean)\\(', 'g');
+    // 注意: conch JSC 不支持 lookbehind, 用"消耗前缀字符"代替 (?<![.\w])
+    var RE_TEMP = new RegExp('(?:^|[^.\\w])((?:var\\s+)?\\w+)\\s*=\\s*this\\.(readByte|readShort|readInt|readLong|readString|readBoolean|readDouble|readBean1|readBean)\\(', 'g');
     var RE_MARK = /-1\s*[!=]=\s*this\.readByte\(\)/g;
     var OP_MAP = { readByte: 'byte', readShort: 'short', readInt: 'int', readLong: 'long', readString: 'string',
         readBoolean: 'boolean', readDouble: 'double', readFloat: 'float', readBean1: 'bean', readBean: 'bean', readArray: 'array',
