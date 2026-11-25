@@ -1,0 +1,74 @@
+name: smali分析壳SDK
+on:
+  workflow_dispatch: {}
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 下载基础APK
+        run: |
+          gh release download v2.0-offline -R "$GITHUB_REPOSITORY" -p '*.apk' -O base.apk
+          ls -la base.apk
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: 设置 Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 安装 apktool
+        run: |
+          curl -sSL -o apktool.jar https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar
+          java -jar apktool.jar --version
+
+      - name: 解码 (跳过资源, 只要smali)
+        run: |
+          java -jar apktool.jar d -f --no-res --only-main-classes base.apk out || true
+          ls out/
+          ls out/smali*/ | head -20
+          find out -name "MainActivity*.smali" | head
+          find out -name "GDTApplication*.smali" | head
+
+      - name: 打印关键 smali
+        run: |
+          for f in $(find out -path "*com/jiguang/main/MainActivity.smali" -o -path "*com/sqwan/msdk/api/sdk/GDTApplication.smali" -o -path "*com/jiguang/h5/*.smali"); do
+            echo "########## $f ##########"
+            cat "$f"
+          done
+
+      - name: 搜索SDK门禁 (隐私/网络检查/热更)
+        run: |
+          echo "===== 隐私相关 ====="
+          grep -rn "privacy\|Privacy\|用户协议\|隐私" out/smali*/com/jiguang out/smali*/com/sqwan 2>/dev/null | head -30
+          echo "===== 网络检查 ====="
+          grep -rn "isNetworkAvailable\|NetworkAvailable\|找不到网络\|网络设置" out/smali*/com/jiguang out/smali*/com/sqwan 2>/dev/null | head -20
+          echo "===== 热更/杀进程 ====="
+          grep -rn "killProcess\|hotter\|Hotter\|plugin_301\|app_plugin" out/smali*/com/jiguang out/smali*/com/sqwan 2>/dev/null | head -20
+          echo "===== MainActivity 引用的类 ====="
+          MAIN=$(find out -path "*com/jiguang/main/MainActivity.smali" | head -1)
+          grep -o 'L[a-zA-Z0-9/_$]*;' "$MAIN" | sort -u | head -40
+
+      - name: 上传完整smali (jiguang+sqwan部分)
+        run: |
+          mkdir -p smali_pack
+          for d in out/smali*; do
+            for pkg in com/jiguang com/sqwan; do
+              if [ -d "$d/$pkg" ]; then
+                mkdir -p "smali_pack/$(basename $d)"
+                cp -r "$d/$pkg" "smali_pack/$(basename $d)/"
+              fi
+            done
+          done
+          cp out/AndroidManifest.xml smali_pack/ 2>/dev/null || true
+          cd smali_pack && zip -rq ../smali_pack.zip . && cd ..
+          ls -la smali_pack.zip
+
+      - name: 上传artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: smali-pack
+          path: smali_pack.zip
