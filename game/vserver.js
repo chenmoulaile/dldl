@@ -552,9 +552,9 @@
         else if (type === 3) { save.bing = Math.max(0, save.bing + (isAdd ? delta : -delta)); total = save.bing; }
         else if (type === 4) { save.jin = Math.max(0, save.jin + (isAdd ? delta : -delta)); total = save.jin; }
         persist();
-        // type, long total, bool positive, long changeValue, bool isAdd, bool showTips, int reasonId
+        // type, long total(绝对值), bool positive(决定total符号,必须true), long changeValue, bool isAdd, bool showTips, int reasonId
         var s = new Ser();
-        s.i32(type).l64(total).boolean(isAdd).l64(delta).boolean(isAdd).boolean(showTips !== false).i32(0);
+        s.i32(type).l64(total).boolean(true).l64(delta).boolean(isAdd).boolean(showTips !== false).i32(0);
         inject(V.handler, ID.RES_COIN_GOLD_UPDATE, s);
     }
 
@@ -892,20 +892,27 @@
         inject(V.handler, -1910, s);
         log('添加物品', itemId, 'x', num, '→ 背包:', V.save.bag[itemId]);
     }
-    // 解析奖励串 "60107:1" 或 "type:value"
-    function grantReward(rewardsStr) {
+    // 解析奖励 (配置可能是数组或JSON串): [{type:"Item",value:"60107:1"}]
+    function grantReward(rewards) {
         try {
-            var arr = JSON.parse(rewardsStr);
+            var arr = rewards;
+            if (typeof arr === 'string') arr = JSON.parse(arr);
+            if (!arr || !arr.length) return;
             for (var i = 0; i < arr.length; i++) {
                 var r = arr[i];
                 var v = String(r.value || '').split(':');
                 var id = parseInt(v[0]), num = parseInt(v[1] || '1');
-                if (r.type === 'Item' || r.type === 'Gold') {
-                    if (r.type === 'Gold') { V.save.gold += num; }
-                    else addItem(id, num);
+                if (r.type === 'Item' || r.type === 'ITEM') {
+                    addItem(id, num);
+                } else if (r.type === 'Gold' || r.type === 'GOLD') {
+                    V.save.gold += num;
+                    persist();
+                } else if (r.type === 'Coin' || r.type === 'COIN') {
+                    V.save.coin += num;
+                    persist();
                 }
             }
-        } catch (e) { log('奖励解析失败', rewardsStr, e && e.message); }
+        } catch (e) { log('奖励解析失败', String(rewards).substring(0, 60), e && e.message); }
     }
     // 打开商店
     HANDLERS[-2701] = function (h) {   // CM_OpenShop → SM_ShowShop
@@ -935,13 +942,13 @@
         if (totalGold > 0) {
             V.save.gold -= totalGold;
             var s1 = new Ser();
-            s1.i32(1).l64(V.save.gold).boolean(false).l64(totalGold).boolean(false).boolean(true).i32(0);
+            s1.i32(1).l64(V.save.gold).boolean(true).l64(totalGold).boolean(false).boolean(true).i32(0);
             inject(h, -1006, s1);
         }
         if (totalCoin > 0) {
             V.save.coin -= totalCoin;
             var s2 = new Ser();
-            s2.i32(2).l64(V.save.coin).boolean(false).l64(totalCoin).boolean(false).boolean(true).i32(0);
+            s2.i32(2).l64(V.save.coin).boolean(true).l64(totalCoin).boolean(false).boolean(true).i32(0);
             inject(h, -1006, s2);
         }
         persist();
@@ -983,7 +990,7 @@
         V.save.coin = Math.max(0, V.save.coin - 1 * (amount || 1));
         persist();
         var s = new Ser();
-        s.i32(2).l64(V.save.coin).boolean(false).l64(amount || 1).boolean(false).boolean(true).i32(0);
+        s.i32(2).l64(V.save.coin).boolean(true).l64(amount || 1).boolean(false).boolean(true).i32(0);
         inject(h, -1006, s);
     };
 
