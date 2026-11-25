@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset='utf-8'/>
+<meta name='renderer' content='webkit'>
+<meta name='viewport' content='width=device-width,initial-scale=1.0,minimum-scale=1.0,maximum-scale=1.0,user-scalable=no'/>
+<meta name='apple-mobile-web-app-capable' content='yes' />
+<meta name='full-screen' content='true' />
+<meta name='x5-fullscreen' content='true' />
+<meta name='360-fullscreen' content='true' />
+<meta http-equiv='X-UA-Compatible' content='IE=edge,chrome=1'>
+<meta name='laya' logoimg='logo.png' logobkcolor='#ffffff' screenorientation='portrait' cacheid='fffffffff' />
+<title>斗罗大陆H5-单机离线版</title>
+<style>
+body{margin:0;background:#000;overflow:hidden;font-family:sans-serif}
+#tip{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#c9a34e;font-size:18px;text-align:center;width:100%}
+#bar{width:60%;height:4px;background:#333;margin:14px auto 0;border-radius:2px;overflow:hidden}
+#barin{height:100%;width:0%;background:linear-gradient(90deg,#c9a34e,#ffdf8e);transition:width .3s}
+#ver{position:absolute;bottom:10px;width:100%;text-align:center;color:#666;font-size:12px}
+</style>
+</head>
+<body style='margin:0;overflow:none;background-color: #000;'>
+<div id='tip'>斗罗大陆H5 · 单机离线版<div id='bar'><div id='barin'></div></div><div id='st' style='font-size:12px;color:#888;margin-top:8px'>正在初始化...</div></div>
+<div id='ver'>单机版 v1.0 · 本地虚拟服务器</div>
+<script loader='laya'>
+// ===== 离线启动配置 =====
+var cdn = "";
+var version = "99998";
+</script>
+<script>
+// 简易脚本加载器
+window.__bootFiles = [
+  ['ver.js', '加载版本信息'],
+  ['js/idmap.js', '加载消息映射'],
+  ['GameMain.max_004325.js', '加载游戏引擎'],
+  ['zlib.min.js', '加载解压工具'],
+  ['js/login_001599.js', '加载登录模块'],
+  ['js/vserver.js', '启动本地服务器'],
+  ['js/main_004827.js', '加载游戏主程序'],
+];
+window.__bootIdx = 0;
+function _loadNext() {
+  if (window.__bootIdx >= window.__bootFiles.length) { _startGame(); return; }
+  var item = window.__bootFiles[window.__bootIdx];
+  var url = item[0], label = item[1];
+  var st = document.getElementById('st'); var bar = document.getElementById('barin');
+  if (st) st.innerText = label + '...';
+  if (bar) bar.style.width = Math.round((window.__bootIdx / window.__bootFiles.length) * 100) + '%';
+  var s = document.createElement('script');
+  s.src = url + '?v=' + Date.now();
+  s.onload = function () { window.__bootIdx++; _loadNext(); };
+  s.onerror = function () {
+    if (st) st.innerText = '加载失败: ' + url + ',重试中...';
+    setTimeout(function () { s.remove(); _loadNext(); }, 1500);
+  };
+  document.head.appendChild(s);
+}
+function _startGame() {
+  var bar = document.getElementById('barin');
+  if (bar) bar.style.width = '100%';
+  try {
+    // ===== 设置离线参数 (替代 37wan SDK 登录) =====
+    var P = window.app.Params;
+    var save = null;
+    try { save = JSON.parse(localStorage.getItem('dldl_save_v2') || 'null'); } catch (e) {}
+    if (!save) save = { account: 'player' + Math.floor(1000 + Math.random() * 9000) };
+    P.userAccount = save.account;
+    P.IP = '127.0.0.1';
+    P.PORT = 10086;
+    P.OP = '37wan';
+    P.SERVER = 1;
+    P.REFERER = '37wan';
+    P.TIME = Math.floor(Date.now() / 1000);
+    P.SIGN = 'offline';
+    P.zoneid = 1;
+    P.gid = 'local';
+    P.PID = '1_1004816_12530_1001';
+    P.serverName = '单机离线服';
+    P.isPcLaunch = false;
+    P.CDN_LIST = ['https://res.xxh5.z7xz.com/xxh5dev/'];
+    console.log('[offline-boot] Params 就绪, 账号:', save.account, 'CDN:', P.CDN_LIST[0]);
+    // ===== 启动游戏 =====
+    var tip = document.getElementById('tip');
+    if (tip) tip.innerText = '正在进入斗罗大陆...';
+    new com.Game();
+    com.Game.gameCaller.init();
+    setTimeout(function () { if (tip) tip.style.display = 'none'; }, 4000);
+  } catch (e) {
+    console.error('[offline-boot] 启动失败:', e);
+    var st = document.getElementById('st');
+    if (st) st.innerText = '启动失败: ' + (e && e.message);
+    alert('游戏启动失败: ' + (e && e.message));
+  }
+}
+_loadNext();
+</script>
+</body>
+</html>

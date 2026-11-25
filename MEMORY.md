@@ -1,49 +1,59 @@
-# MEMORY — 记忆文档(防沙箱重置,每阶段更新)
+# MEMORY — 斗罗大陆H5 单机化项目记忆文档
 
-更新时间: 2026-11-24 00:5x (UTC+8)
-阶段: 【阶段1·文件获取】受阻,等待用户重新提供 APK
+更新: 2026-11-25 04:00 (UTC+8) | 阶段: 【阶段3·完整单机化 v2】H5端核心链路全通
 
-## 一、任务全貌(用户需求,全部已确认)
-1. 把 10+ 年前的联网老游戏(单机逻辑为主,服务器已停)改成**单机离线存档版**
-2. 分析登录响应包/协议字段 → 本地构造字段 → 本地回包实现登录
-3. **伪造假人,伪造"很多人还在玩"的迹象**(假在线、假聊天、假排行)
-4. **外挂菜单** 或 **内购功能**(用户追加需求,做分析后定方案)
-5. work=代码跟踪, dist=编译产物, tmp=临时; 需要的工具自行下载安装
-6. 阶段性成果上传 GitHub: https://github.com/chenmoulaile/dldl (token 在 work/.ghtoken,勿提交勿外传,用户做完即删)
-7. 最终交付编译签名好的安装包
+## 一、任务需求(用户)
+1. 老网游完全单机化: 剧情/觉醒武魂/任务/商店/金币增减 全部正常
+2. VIP 默认无(未开通) ✓ | 金币正常初始值(10000)非乱码 ✓
+3. HUD 上下正常显示 ✓ | 充值活动HUD ✓
+4. 外挂菜单(GM面板: 金币/钻石/等级/删档) ✓
+5. 假人系统(主城游走+聊天) 部分完成
+6. work=代码 dist=APK tmp=临时; GitHub: chenmoulaile/dldl (token in .ghtoken)
 
-## 二、当前阻塞点(关键!)
-- 用户给的分享链接: https://www.ilanzou.com/s/psdyDmpVK (RAR 内含 APK)
-- **ilanzou 对阿里云机房 IP 风控**: API 返回空列表,网页显示"该链接已过期,请联系分享者"
-  - 已验证 4 个链接(含 2 个公开活跃链接)全部如此 → 是 IP 风控,不是链接失效
-  - 用户本地打开该链接应是正常的
-- **解决路径:请用户把 RAR/APK 直接作为对话附件上传**(最快),或提供非 ilanzou 的直链
-- 已告知用户,等下一轮回复
+## 二、v2 架构(核心技术)
+- **vserver.js v2**: JS层虚拟服务器, hook SocketHandler.connect/sendPackage
+- **运行时反射引擎**: 解析客户端 Laya.__classmap 消息类 reading().toString()
+  → wire操作序列(含 readBean1/readFloat/-1==标记/无名读取/getValByType循环体)
+  → writeOps 通用序列化器(4376消息全覆盖)
+- **idmap.js**: 4376条 消息ID→类名 映射(负数键必须加引号!)
+- **关键坑**:
+  - ResLoginPlayerDetailInfo(-1107) 107字段: newcomerGuideIDs 需 [ff][00] 特殊布局(迭代插入法验证)
+  - wSoulInfo/hunheInfoVO/magicHerbInfo/expPoolInfo/tinyMailsInfo/magicHerbBag 不能为null(空实例)
+  - jewelInfo 需空nest [00][00]; equips 需空数组[00][00]
+  - -1607 同ID冲突: SM_Task_Info 为真(MessagePool注册为准)
+  - 两个同名WSoulVO: 详情用 x5Protocol.wsoul.bean(带playerSoulInfo map)
+- **探索任务系统(剧情驱动)**: SM_Load_Explor(-1626) 推送主线任务链
+  200001斗罗大陆→200002觉醒仪式→200003觉醒大殿→200004武魂觉醒→200005附体...
+  CM_Choose_Explor_Task(-1627)/CM_Reward_Explor(-1630) → 推进链
+- **武魂觉醒**: CM_ChooseSoul(-9701)→SM_ChooseSoulSuccess(-9702)+SM_WSoulObjUpdate(-9710)
+  觉醒地图id=90012(isJueXingMap: 90012或90014-90018)
 
-## 三、已完成的逆向成果(ilanzou 协议,已 100% 验证)
-- apiBaseURL: `https://apis.ilanzou.com/`,页面: `https://www.ilanzou.com/s/<shareId>`
-- **AES-128-ECB/PKCS7, key = `lanZouY-disk-app`(16字节), 输出 hex 大写**
-- 请求拦截器全局参数(query string,POST 空 body):
-  - devType: 3(移动UA)/6(PC UA); devModel: 浏览器名(如 Chrome); extra: 2
-  - uuid: localStorage 21位随机; timestamp: encryptHex(毫秒时间戳字符串)
-- 关键端点:
-  - `POST /unproved/recommend/list?shareId=<id>&type=0&offset=1&limit=60` → 分享文件列表
-    - 响应: {code:200,status:0|1|2,list:[{fileList:[{fileId,fileName,fileUrl,...}]}]}
-    - status=2 → 要提取码; 空列表 → "已过期"(或风控)
-  - `POST /unproved/downLoad/url` + params → 下载直链
-  - 下载直链构造: apiBaseURL + `unproved/file/redirect?downloadId=<encryptHex(fileId|userId)>&enable=1&devType=<3|6>&uuid=<uuid>`
-- 工具脚本: `scripts/ilanzou_api2.py`(call/encrypt_hex 可复用)
-- 前端 chunk 结构已摸清(/s/js/chunk.<id>.<ts>.<hash>.js, hash 表在 app js 里)
+## 三、已验证通过的流程(H5浏览器端)
+1. 清档→创角→进游戏(觉醒地图) ✓
+2. HUD全显示: 战力/等级/金币(紫钻图标)/VIP"未开通"/底部菜单 ✓
+3. 剧情: 200001对话(点击推进)→选择→200002觉醒仪式(前往寻路) ✓
+4. 武魂数据层: CM_ChooseSoul→playerSoulInfo[1]={id:13,level:1} ✓
+5. GM菜单: 金币+1万→save.gold 10000→20000→HUD实时更新(ResCoinGoldUpdateMessage -1006) ✓
+6. 活动自动响应: CM_OpenActivity→SM_OpenActivity 反射生成 ✓
+7. agent-browser测试链: scripts/diag/fulltest.sh (tapinject.js 每次reload后必须重注入!)
 
-## 四、环境状态
-- Java 21 / Python 3.12 (pycryptodome 已装) / Node 24 / git 2.47 / unrar / zip / keytool
-- 待装: jadx, apktool, apksigner/uber-apk-signer(拿到 APK 后再装)
-- agent-browser 可用(npm 全局 + @agent-browser/cli-linux-x64-gnu)
-- 出口 IP: 北京阿里云(123.57.40.228) — 注意:国内网盘风控高发区
+## 四、剩余工作
+- [ ] 商店购买扣款(CM_CoinshopBuy -2706 等) + 背包物品
+- [ ] 假人完善(主城cansee已写,聊天定时) + 排行榜假数据
+- [ ] 剧情200002+的分步action(对话10003等, 真机可玩)
+- [ ] APK重打包: repack.py + DCC注入(inject_dcc.py已有) + idmap.js/appindex.html 更新
+- [ ] GitHub Actions 模拟器整机测试
+- [ ] 最终签名交付 dist/
 
-## 五、恢复指引(沙箱重置后)
-1. `cd /home/z/my-project/work && git pull` 恢复所有成果
-2. 本文件(MEMORY.md)即上下文,按"一、任务全貌"对齐用户需求
-3. 阻塞点若仍在:向用户要 APK 附件;若用户已给,跳到反编译阶段
-4. GitHub push 命令(勿回显 token):
-   `git push origin main` (remote 已内嵌凭证,若失效请用户重新提供)
+## 五、环境
+- testsrv: python3 scripts/testsrv.py (8899端口, 本地优先CDN代理)
+- 测试页: http://127.0.0.1:8899/appindex.html (agent-browser set viewport 720 1280)
+- CDN: res.xxh5.z7xz.com/xxh5dev/ 允许CORS(*) — 资源直连不依赖本地服务器
+- msgs.json: tmp/msgs.json (4376消息+1793bean schema, parse_msgs.py生成)
+- 诊断: scripts/diag/{diag_detail,trace_read,dv_trace,client_read,insert_probe,iter_fix}.js
+
+## 六、恢复指引
+1. cd work && git pull
+2. 起服务: python3 scripts/testsrv.py
+3. agent-browser open http://127.0.0.1:8899/appindex.html + scripts/diag/tapinject.js
+4. 按"四、剩余工作"继续
